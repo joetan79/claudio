@@ -31,6 +31,8 @@ function esc(s) {
     .replace(/"/g, '&quot;');
 }
 
+const stripSSML = s => s.replace(/<[^>]*>/g, '');
+
 function fmtTime(ts) {
   const d = new Date(ts);
   return d.toLocaleDateString(i18n.current === 'zh' ? 'zh-CN' : 'en-US', {
@@ -146,7 +148,7 @@ function renderPlayerContent() {
   const djBlock = np
     ? `<div class="dj-card">
         <div class="dj-label">${esc(i18n.t('djSays'))}</div>
-        <div class="dj-say">${esc(np.say || '')}</div>
+        <div class="dj-say">${esc(stripSSML(np.say || ''))}</div>
         ${np.audioUrl ? `
           <button class="btn-replay" onclick="playDJAudio('${esc(np.audioUrl)}')">
             &#9654; ${i18n.t('replay')}
