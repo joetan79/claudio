@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Claudio Admin</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg: #0a0a0a; --surface: #141414; --surface2: #1e1e1e;
+      --border: #2a2a2a; --text: #ffffff; --muted: #888888;
+      --accent: #c8a96e; --accent-dim: rgba(200,169,110,0.15);
+      --danger: #e05c5c; --success: #4caf50;
+      --radius: 10px; --radius-sm: 6px;
+    }
+    html, body { min-height: 100%; background: var(--bg); color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-size: 15px; line-height: 1.5; -webkit-font-smoothing: antialiased; }
+    #app { max-width: 1000px; margin: 0 auto; padding: 0 16px 40px; }
+
+    /* Topbar */
+    .topbar { display: flex; align-items: center; justify-content: space-between;
+      padding: 16px 0; border-bottom: 1px solid var(--border); margin-bottom: 28px; }
+    .topbar-title { font-size: 1.1rem; font-weight: 700; color: var(--accent); letter-spacing: 0.02em; }
+    .topbar-right { display: flex; align-items: center; gap: 12px; }
+    .topbar-user { font-size: 0.82rem; color: var(--muted); }
+
+    /* Auth */
+    .auth-wrap { max-width: 380px; margin: 80px auto 0; }
+    .auth-logo { text-align: center; margin-bottom: 32px; }
+    .auth-logo h1 { font-size: 2rem; font-weight: 800; color: var(--accent); }
+    .auth-logo p { color: var(--muted); font-size: 0.85rem; margin-top: 4px; }
+    .form-group { margin-bottom: 16px; }
+    .form-group label { display: block; font-size: 0.82rem; color: var(--muted); margin-bottom: 6px; }
+    .form-group input { width: 100%; background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius-sm); color: var(--text); font-size: 0.95rem;
+      padding: 11px 13px; outline: none; transition: border-color 0.15s; }
+    .form-group input:focus { border-color: var(--accent); }
+    .btn-primary { width: 100%; background: var(--accent); color: #0a0a0a; border: none;
+      border-radius: var(--radius-sm); font-size: 0.95rem; font-weight: 700; padding: 12px;
+      cursor: pointer; margin-top: 6px; transition: opacity 0.15s; }
+    .btn-primary:hover { opacity: 0.9; }
+    .btn-primary:disabled { opacity: 0.5; cursor: default; }
+
+    /* Stats */
+    .stats-row { display: flex; gap: 16px; margin-bottom: 28px; }
+    .stat-card { flex: 1; background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 18px 20px; }
+    .stat-label { font-size: 0.75rem; color: var(--muted); text-transform: uppercase;
+      letter-spacing: 0.07em; margin-bottom: 6px; }
+    .stat-value { font-size: 1.8rem; font-weight: 700; color: var(--accent); }
+
+    /* Table */
+    .table-wrap { background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); overflow: hidden; }
+    .table-title { padding: 14px 18px; font-size: 0.85rem; font-weight: 600;
+      border-bottom: 1px solid var(--border); color: var(--muted);
+      text-transform: uppercase; letter-spacing: 0.07em; }
+    table { width: 100%; border-collapse: collapse; }
+    th { text-align: left; font-size: 0.75rem; color: var(--muted); font-weight: 600;
+      text-transform: uppercase; letter-spacing: 0.06em; padding: 10px 14px;
+      border-bottom: 1px solid var(--border); background: var(--surface2); }
+    td { padding: 11px 14px; font-size: 0.88rem; border-bottom: 1px solid var(--border); }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: var(--surface2); }
+
+    /* Badges */
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 4px;
+      font-size: 0.75rem; font-weight: 600; }
+    .badge-active { background: rgba(76,175,80,0.15); color: var(--success); }
+    .badge-inactive { background: rgba(136,136,136,0.15); color: var(--muted); }
+    .badge-admin { background: var(--accent-dim); color: var(--accent); }
+
+    /* Action buttons */
+    .btn-action { padding: 4px 10px; border-radius: 4px; font-size: 0.78rem;
+      cursor: pointer; border: 1px solid; margin-right: 6px; transition: opacity 0.15s; }
+    .btn-action:hover { opacity: 0.75; }
+    .btn-reset { border-color: var(--border); color: var(--muted); background: transparent; }
+    .btn-delete { border-color: var(--danger); color: var(--danger); background: transparent; }
+
+    /* Misc */
+    .btn-logout { background: none; border: 1px solid var(--border); color: var(--muted);
+      font-size: 0.8rem; padding: 6px 14px; border-radius: 5px; cursor: pointer;
+      transition: border-color 0.15s, color 0.15s; }
+    .btn-logout:hover { border-color: var(--danger); color: var(--danger); }
+    .error-msg { color: var(--danger); font-size: 0.85rem; margin-top: 10px; text-align: center; }
+    .empty-msg { color: var(--muted); font-size: 0.88rem; padding: 20px; text-align: center; }
+    @media (max-width: 600px) {
+      .stats-row { flex-direction: column; }
+      th:nth-child(4), td:nth-child(4),
+      th:nth-child(5), td:nth-child(5) { display: none; }
+    }
+  </style>
+</head>
+<body>
+<div id="app"></div>
+<script>
+  const TOKEN_KEY = 'claudio_admin_token';
+  let token = sessionStorage.getItem(TOKEN_KEY);
+  let currentUser = null;
+  let usersData = null;
+
+  function fmtDate(ts) {
+    if (!ts) return '—';
+    const d = new Date(ts);
+    const pad = n => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  }
+
+  async function apiFetch(method, path, body) {
+    const headers = { 'Content-Type': 'application/json' };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    const res = await fetch(path, {
+      method, headers,
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw Object.assign(new Error(data.error || 'Request failed'), { status: res.status });
+    return data;
+  }
+
+  async function doLogin(email, password) {
+    const data = await apiFetch('POST', '/api/auth/login', { email, password });
+    token = data.token;
+    currentUser = { uid: data.uid, username: data.username };
+    sessionStorage.setItem(TOKEN_KEY, token);
+    // Verify admin role by hitting /api/admin/users
+    const result = await apiFetch('GET', '/api/admin/users');
+    usersData = result;
+    render();
+  }
+
+  function doLogout() {
+    sessionStorage.removeItem(TOKEN_KEY);
+    token = null; currentUser = null; usersData = null;
+    render();
+  }
+
+  async function loadUsers() {
+    try {
+      usersData = await apiFetch('GET', '/api/admin/users');
+      renderDashboard();
+    } catch (e) {
+      alert('Failed to load users: ' + e.message);
+    }
+  }
+
+  async function resetPassword(uid, username) {
+    const pw = prompt(`New password for ${username} (min 8 chars):`);
+    if (!pw) return;
+    if (pw.length < 8) { alert('Password must be at least 8 characters.'); return; }
+    try {
+      await apiFetch('POST', `/api/admin/users/${uid}/reset-password`, { newPassword: pw });
+      alert(`Password reset for ${username}.`);
+    } catch (e) { alert('Error: ' + e.message); }
+  }
+
+  async function deleteUser(uid, username) {
+    if (!confirm(`Delete user "${username}"? This cannot be undone.`)) return;
+    try {
+      await apiFetch('DELETE', `/api/admin/users/${uid}`);
+      await loadUsers();
+    } catch (e) { alert('Error: ' + e.message); }
+  }
+
+  function renderLogin(errorMsg) {
+    document.getElementById('app').innerHTML = `
+<div class="auth-wrap">
+  <div class="auth-logo">
+    <h1>Claudio</h1>
+    <p>Admin Dashboard</p>
+  </div>
+  <div class="form-group">
+    <label>Email</label>
+    <input type="email" id="adm-email" autocomplete="email" placeholder="admin@claudio.local" />
+  </div>
+  <div class="form-group">
+    <label>Password</label>
+    <input type="password" id="adm-pass" autocomplete="current-password" />
+  </div>
+  ${errorMsg ? `<p class="error-msg">${errorMsg}</p>` : ''}
+  <button class="btn-primary" id="adm-login-btn">Sign In</button>
+</div>`;
+    const btn = document.getElementById('adm-login-btn');
+    const login = async () => {
+      const email = document.getElementById('adm-email').value.trim();
+      const pass  = document.getElementById('adm-pass').value;
+      btn.disabled = true; btn.textContent = 'Signing in...';
+      try { await doLogin(email, pass); }
+      catch (e) {
+        btn.disabled = false; btn.textContent = 'Sign In';
+        renderLogin(e.status === 403 ? 'Not an admin account.' : (e.message || 'Login failed'));
+      }
+    };
+    btn.addEventListener('click', login);
+    document.getElementById('adm-pass').addEventListener('keydown', e => { if (e.key === 'Enter') btn.click(); });
+  }
+
+  function renderDashboard() {
+    const d = usersData;
+    if (!d) return;
+    const rows = d.users.map(u => `
+<tr>
+  <td style="color:var(--muted);font-size:0.78rem">${u.username}</td>
+  <td>${u.email}</td>
+  <td><span class="badge badge-${u.role === 'admin' ? 'admin' : 'inactive'}">${u.role}</span></td>
+  <td>${fmtDate(u.created_at)}</td>
+  <td>${fmtDate(u.last_login)}</td>
+  <td><span class="badge badge-${u.status}">${u.status}</span></td>
+  <td>
+    <button class="btn-action btn-reset" onclick="resetPassword('${u.id}','${u.username.replace(/'/g,"\\'")}')">Reset PW</button>
+    ${u.id !== currentUser?.uid ? `<button class="btn-action btn-delete" onclick="deleteUser('${u.id}','${u.username.replace(/'/g,"\\'")}')">Delete</button>` : ''}
+  </td>
+</tr>`).join('');
+
+    document.getElementById('app').innerHTML = `
+<div class="topbar">
+  <span class="topbar-title">Claudio Admin</span>
+  <div class="topbar-right">
+    ${currentUser ? `<span class="topbar-user">${currentUser.username}</span>` : ''}
+    <button class="btn-logout" id="adm-logout">Logout</button>
+  </div>
+</div>
+<div class="stats-row">
+  <div class="stat-card">
+    <div class="stat-label">Total Users</div>
+    <div class="stat-value">${d.total}</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Active (30 days)</div>
+    <div class="stat-value" style="color:var(--success)">${d.active}</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Inactive</div>
+    <div class="stat-value" style="color:var(--muted)">${d.inactive}</div>
+  </div>
+</div>
+<div class="table-wrap">
+  <div class="table-title">Users</div>
+  ${d.users.length === 0 ? '<div class="empty-msg">No users found.</div>' : `
+  <table>
+    <thead><tr>
+      <th>Username</th><th>Email</th><th>Role</th>
+      <th>Registered</th><th>Last Login</th><th>Status</th><th>Actions</th>
+    </tr></thead>
+    <tbody>${rows}</tbody>
+  </table>`}
+</div>`;
+    document.getElementById('adm-logout').addEventListener('click', doLogout);
+  }
+
+  async function render() {
+    if (!token) { renderLogin(); return; }
+    if (!usersData) {
+      document.getElementById('app').innerHTML = `<div class="empty-msg" style="margin-top:80px">Loading...</div>`;
+      try {
+        const data = await apiFetch('GET', '/api/auth/me');
+        currentUser = { uid: data.uid, username: data.username };
+        usersData = await apiFetch('GET', '/api/admin/users');
+        renderDashboard();
+      } catch (e) {
+        if (e.status === 401 || e.status === 403) {
+          sessionStorage.removeItem(TOKEN_KEY);
+          token = null;
+          renderLogin(e.status === 403 ? 'Not an admin account.' : 'Session expired, please login again.');
+        } else {
+          renderLogin(e.message);
+        }
+      }
+    } else {
+      renderDashboard();
+    }
+  }
+
+  render();
+</script>
+</body>
+</html>
