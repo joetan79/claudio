@@ -209,7 +209,7 @@ function renderSong(s, idx) {
       <div class="song-query">${displayName}</div>
       ${s.reason ? `<div class="song-reason"><span>${esc(i18n.t('whyThis'))}</span> ${esc(s.reason)}</div>` : ''}
     </div>
-    <button class="btn-played" data-query="${esc(rawQuery)}"
+    <button class="btn-played" id="played-btn-${idx}" data-query="${esc(rawQuery)}"
       onclick="event.stopPropagation();markPlayed(this)">${esc(i18n.t('markPlayed'))}</button>
   </div>
   ${playerHtml}
@@ -708,6 +708,8 @@ function createYTPlayer(index, videoId) {
         if (e.data === YT.PlayerState.PLAYING) {
           if (btn) btn.textContent = '⏸ Pause';
           if (indicator) indicator.style.display = 'none';
+          const playedBtn = document.getElementById('played-btn-' + index);
+          if (playedBtn && !playedBtn.disabled) window.markPlayed(playedBtn);
         }
         if (e.data === YT.PlayerState.PAUSED) {
           if (btn) btn.textContent = '▶ Play';
