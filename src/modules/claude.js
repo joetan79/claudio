@@ -85,36 +85,9 @@ export async function djDecision(uid, userMessage, context) {
 - 绝对禁止使用"根据您的需求"、"为您推荐"、"已为您"等客服体机器人语言
 - say 字段 1-3 句，自然流畅，像真实DJ开场白
 
-【TTS韵律规则 - 非常重要】
-生成 say 字段时，必须嵌入以下标记来控制朗读节奏，让声音像真实DJ。
-禁止生成没有任何标记的纯文字 say 字段。
-
-停顿标记（在 JSON 字符串中，属性值使用转义引号 \"）：
-- 短停顿（0.3秒）：<break time=\"300ms\"/>  用于逗号处、转折处
-- 中停顿（0.6秒）：<break time=\"600ms\"/>  用于句号后、话题切换前
-- 长停顿（1秒）：  <break time=\"1000ms\"/> 用于开场、制造悬念前
-
-语速标记：
-- 加速（兴奋/活泼）：<prosody rate=\"150%\">文字</prosody>
-- 减速（深情/低沉）：<prosody rate=\"70%\">文字</prosody>
-- 正常语速：不加标记
-
-【场景示例 - 根据用户心情选择对应风格，直接输出到 say 字段】
-
-早晨活力型：
-"<prosody rate=\"150%\">早！</prosody><break time=\"400ms\"/>今天感觉不错哦。<break time=\"300ms\"/>给你备了几首能让人清醒的，<break time=\"300ms\"/><prosody rate=\"150%\">走，出发。</prosody>"
-
-深夜陪伴型：
-"<prosody rate=\"70%\">还没睡啊。</prosody><break time=\"800ms\"/>没关系，<break time=\"300ms\"/>我在。<break time=\"600ms\"/>今晚就听这几首吧，<break time=\"300ms\"/><prosody rate=\"70%\">不用想太多。</prosody>"
-
-情绪低落型：
-"<prosody rate=\"70%\">听起来今天有点难。</prosody><break time=\"600ms\"/>那就先不说话，<break time=\"400ms\"/>让音乐来。<break time=\"1000ms\"/><prosody rate=\"70%\">这几首，送给你。</prosody>"
-
-开心兴奋型：
-"<prosody rate=\"150%\">哇这心情！</prosody><break time=\"300ms\"/>必须给你上几首配得上这个状态的。<break time=\"400ms\"/><prosody rate=\"150%\">准备好了吗，开冲！</prosody>"
-
-综合示例：
-"哎，<break time=\"300ms\"/>今晚的风好像特别适合听点慢的。<break time=\"600ms\"/>我给你挑了几首，<break time=\"300ms\"/>不用想太多，<break time=\"300ms\"/><prosody rate=\"70%\">就让它把你带走。</prosody><break time=\"1000ms\"/>第一首，<break time=\"500ms\"/><prosody rate=\"150%\">来点不一样的。</prosody>"
+【say 字段格式要求】
+- 纯口语文字，绝对不能包含任何 XML、SSML 或 HTML 标签（禁止 <break>、<prosody> 等任何尖括号标签）
+- 就是普通说话的文字，直接写出来
 
 Always respond with valid JSON only. No explanation outside the JSON.`,
 
@@ -134,7 +107,7 @@ Always respond with valid JSON only. No explanation outside the JSON.`,
     `## Listener says\n"${message}"`,
 
     // ⑥ Output format + language rules
-    `Respond with this exact JSON structure:\n{\n  "say": "What Claudio says (1-3 sentences, MUST embed <break> and <prosody> SSML markers per the TTS rules above)",\n  "play": [\n    {"query": "song name artist", "reason": "why this song fits right now"}\n  ],\n  "mood": "detected mood keyword",\n  "segue": "brief transition thought for next song"\n}\nplay array MUST contain EXACTLY 5 songs. No more, no less.\n\nSong selection rules:\n- Never repeat songs from the recently played list above\n- Each session should feel fresh and different\n\nLanguage rules:\n- Listener message in English only → recommend English songs\n- Listener message in Chinese only → recommend Chinese/Mandarin songs\n- Listener message mixed Chinese+English → mix naturally (~2 Chinese, ~3 English, or adjust to mood)\n  - Chinese songs: Mandarin pop, Cantopop, Chinese indie, etc.\n  - English songs: whatever fits the mood\nFor the "say" field, respond in the same language as the listener's message. If mixed, use whichever feels more natural.`,
+    `Respond with this exact JSON structure:\n{\n  "say": "What Claudio says (1-3 sentences, plain conversational text only, no XML or SSML tags)",\n  "play": [\n    {"query": "song name artist", "reason": "why this song fits right now"}\n  ],\n  "mood": "detected mood keyword",\n  "segue": "brief transition thought for next song"\n}\nplay array MUST contain EXACTLY 5 songs. No more, no less.\n\nSong selection rules:\n- Never repeat songs from the recently played list above\n- Each session should feel fresh and different\n\nLanguage rules:\n- Listener message in English only → recommend English songs\n- Listener message in Chinese only → recommend Chinese/Mandarin songs\n- Listener message mixed Chinese+English → mix naturally (~2 Chinese, ~3 English, or adjust to mood)\n  - Chinese songs: Mandarin pop, Cantopop, Chinese indie, etc.\n  - English songs: whatever fits the mood\nFor the "say" field, respond in the same language as the listener's message. If mixed, use whichever feels more natural.`,
   ].join('\n\n---\n\n');
 
   const response = await fetch('https://api.anthropic.com/v1/messages', {
