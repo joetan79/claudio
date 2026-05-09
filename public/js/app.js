@@ -767,7 +767,6 @@ window.toggleYT = function(index, videoId) {
 };
 
 window.markPlayed = async function(btn) {
-  console.log('[markPlayed] called', btn?.id, btn?.dataset?.query, btn?.disabled);
   btn.disabled = true;
   btn.textContent = '✓';
   btn.style.opacity = '0.4';
@@ -778,7 +777,7 @@ window.markPlayed = async function(btn) {
   try {
     await api.played(song_name, artist, '');
   } catch (e) {
-    console.error('[markPlayed] api.played failed', e);
+    // silent fail — button stays disabled
   }
 };
 
