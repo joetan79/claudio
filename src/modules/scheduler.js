@@ -12,7 +12,7 @@ function getNextTriggerMs(hour) {
 
 async function generateDailyPlan(timeLabel, message, timeOfDay) {
   const db = getSystemDb();
-  const users = db.prepare('SELECT id, username FROM users').all();
+  const users = db.prepare("SELECT id, username FROM users WHERE role != 'admin'").all();
   console.log(`[Scheduler] ${timeLabel} — generating for ${users.length} users`);
 
   for (const user of users) {
