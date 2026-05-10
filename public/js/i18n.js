@@ -42,6 +42,7 @@ const LANGS = {
     noAudio: 'Not available on NCM',
     playAll: 'Play All',
     next: 'Next',
+    tapAgain: '👆 Tap again',
   },
   zh: {
     appName: 'Claudio',
@@ -86,6 +87,7 @@ const LANGS = {
     noAudio: '网易云暂无版权',
     playAll: '全部播放',
     next: '下一首',
+    tapAgain: '👆 再点一次',
   },
 };
 

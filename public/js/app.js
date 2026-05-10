@@ -170,6 +170,10 @@ function fillPlayer() {
   window._currentSongs = state.nowPlaying?.play || [];
   document.getElementById('view-content').innerHTML = renderPlayerContent();
   restorePlayerButtons();
+  if (isIOS && !localStorage.getItem('ios_hint_shown')) {
+    const djCard = document.querySelector('.dj-card');
+    if (djCard) djCard.insertAdjacentHTML('afterend', `<div id="ios-hint" style="background:#c8a96e22;border:1px solid #c8a96e;border-radius:8px;padding:10px 14px;margin:8px 0;color:#c8a96e;font-size:13px;display:flex;justify-content:space-between;align-items:center;"><span>💡 iOS tip: tap Play twice to start a song</span><button onclick="document.getElementById('ios-hint').remove();localStorage.setItem('ios_hint_shown','1')" style="background:none;border:none;color:#c8a96e;font-size:18px;cursor:pointer">×</button></div>`);
+  }
 }
 
 function renderPlayerContent() {
@@ -563,6 +567,7 @@ let currentPlayingIndex = null;
 let currentIframePaused = false;
 let ytApiReady = false;
 const ytPlayers = {};
+const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
 
 window.onYouTubeIframeAPIReady = function() {
   mlog('YT API ready');
@@ -622,6 +627,14 @@ function playFromQueue() {
   }
   updateQueueButtons();
   window.toggleYT(playQueueIndex, videoId);
+  if (isIOS) {
+    const qIdx = playQueueIndex;
+    const playAllBtn = document.getElementById('btn-play-all');
+    if (playAllBtn) {
+      playAllBtn.innerHTML = i18n.t('tapAgain');
+      playAllBtn.onclick = () => window.toggleYT(qIdx, videoId);
+    }
+  }
 }
 
 window.playAll = function() {
@@ -768,6 +781,13 @@ function createYTPlayer(index, videoId, songName, artist) {
           if (indicator) indicator.style.display = 'none';
           const playedBtn = document.getElementById('played-btn-' + index);
           if (playedBtn && !playedBtn.disabled) window.markPlayed(playedBtn);
+          if (isIOS && playQueue.length > 0) {
+            const playAllBtn = document.getElementById('btn-play-all');
+            if (playAllBtn) {
+              playAllBtn.innerHTML = i18n.t('next') + ' ▶';
+              playAllBtn.onclick = () => window.playNext();
+            }
+          }
         }
         if (e.data === YT.PlayerState.PAUSED) {
           if (btn) btn.textContent = '▶ Play';
@@ -829,6 +849,7 @@ window.toggleYT = function(index, videoId) {
   const _songName = _song?.ncm?.name || _song?.song || _song?.query || '';
   const _artist = _song?.ncm?.artist || _song?.artist || '';
   createYTPlayer(index, videoId, _songName, _artist);
+  if (isIOS && btn && playQueue.length === 0) btn.innerHTML = i18n.t('tapAgain');
 };
 
 window.markPlayed = async function(btn) {
