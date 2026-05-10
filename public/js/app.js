@@ -226,7 +226,8 @@ function renderSong(s, idx) {
         <button class="btn-yt-play" id="yt-btn-${idx}" onclick="toggleYT(${idx}, '${vid}')">&#9654; Play</button>
         <span id="yt-indicator-${idx}" style="display:none;color:#e55;font-size:1rem;line-height:1">⏸</span>
         ${ch ? `<span style="font-size:0.8rem;color:#555">${ch}</span>` : ''}
-      </div>`;
+      </div>
+`;
   } else {
     playerHtml = `<button style="margin-top:8px;font-size:0.78rem;padding:3px 8px;border:1px solid #444;background:transparent;color:#888;border-radius:4px;cursor:pointer"
       onclick="openYoutube('${esc(s.query || '')}')">YouTube &#8599;</button>`;
@@ -727,6 +728,9 @@ function createYTPlayer(index, videoId, songName, artist) {
     events: {
       onReady: function(e) {
         mlog('onReady fired for:', videoId);
+        window._ytPlayerReady = true;
+        const btn = document.getElementById('yt-btn-' + index);
+        if (btn && btn.textContent === '⏳ Loading...') btn.textContent = '⏸ Pause';
         e.target.playVideo();
         const song = window._currentSongs?.[index];
         updateMediaSession(
@@ -818,8 +822,9 @@ window.toggleYT = function(index, videoId) {
   });
   currentPlayingIndex = index;
   currentIframePaused = false;
-  if (btn) btn.textContent = '⏸ Pause';
+  if (btn) btn.textContent = '⏳ Loading...';
   if (indicator) indicator.style.display = 'none';
+  window._ytPlayerReady = false;
   const _song = window._currentSongs?.[index];
   const _songName = _song?.ncm?.name || _song?.song || _song?.query || '';
   const _artist = _song?.ncm?.artist || _song?.artist || '';
