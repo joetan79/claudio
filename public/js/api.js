@@ -7,11 +7,17 @@ const api = {
     const headers = { 'Content-Type': 'application/json' };
     const token = this.getToken();
     if (token) headers['Authorization'] = `Bearer ${token}`;
-    const res = await fetch(path, {
-      method,
-      headers,
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-    });
+    let res;
+    try {
+      res = await fetch(path, {
+        method,
+        headers,
+        body: body !== undefined ? JSON.stringify(body) : undefined,
+      });
+    } catch (err) {
+      mlog('fetch error: ' + err.message);
+      throw err;
+    }
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Request failed');
     return data;

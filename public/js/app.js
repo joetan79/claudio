@@ -1,3 +1,32 @@
+// ── Debug overlay ──────────────────────────────────────────────────────────
+const _debugMode = new URLSearchParams(window.location.search).get('debug') === '1';
+const _debugLines = [];
+let _debugEl = null;
+
+if (_debugMode) {
+  _debugEl = document.createElement('div');
+  _debugEl.style.cssText = 'position:fixed;bottom:0;left:0;right:0;z-index:9999;background:rgba(0,0,0,0.75);color:#0f0;font-size:11px;font-family:monospace;max-height:200px;overflow-y:scroll;padding:4px 8px;line-height:1.4;white-space:pre-wrap;word-break:break-all';
+  document.body.appendChild(_debugEl);
+}
+
+function mlog(...args) {
+  console.log(...args);
+  if (!_debugMode) return;
+  const ts = new Date().toISOString().slice(11, 23);
+  const msg = args.map(a => typeof a === 'string' ? a : JSON.stringify(a)).join(' ');
+  _debugLines.push(ts + ' ' + msg);
+  if (_debugLines.length > 10) _debugLines.shift();
+  if (_debugEl) {
+    _debugEl.textContent = _debugLines.join('\n');
+    _debugEl.scrollTop = _debugEl.scrollHeight;
+  }
+}
+
+{
+  const ytScript = document.querySelector('script[src*="youtube.com/iframe_api"]');
+  if (ytScript) ytScript.addEventListener('load', () => mlog('YT script injected'));
+}
+
 // ── Audio ──────────────────────────────────────────────────────────────────
 let currentAudio = null;
 
@@ -187,6 +216,7 @@ function renderSong(s, idx) {
   const rawArtist = s.ncm?.artist || s.artist || '';
   const rawQuery = rawArtist ? `${rawName} - ${rawArtist}` : rawName;
 
+  mlog('song', idx, 'videoId:', s.yt?.videoId);
   let playerHtml;
   if (s.yt?.videoId) {
     const vid = esc(s.yt.videoId);
@@ -534,6 +564,7 @@ let ytApiReady = false;
 const ytPlayers = {};
 
 window.onYouTubeIframeAPIReady = function() {
+  mlog('YT API ready');
   ytApiReady = true;
 };
 
@@ -672,9 +703,9 @@ function restorePlayerButtons() {
   } catch(e) {}
 }
 
-function createYTPlayer(index, videoId) {
+function createYTPlayer(index, videoId, songName, artist) {
   if (!ytApiReady) {
-    setTimeout(() => createYTPlayer(index, videoId), 500);
+    setTimeout(() => createYTPlayer(index, videoId, songName, artist), 500);
     return;
   }
   const container = document.getElementById('audio-container');
@@ -695,6 +726,7 @@ function createYTPlayer(index, videoId) {
     playerVars: { autoplay: 1, controls: 0, modestbranding: 1, rel: 0, playsinline: 1 },
     events: {
       onReady: function(e) {
+        mlog('onReady fired for:', videoId);
         e.target.playVideo();
         const song = window._currentSongs?.[index];
         updateMediaSession(
@@ -702,7 +734,29 @@ function createYTPlayer(index, videoId) {
           song?.ncm?.artist || song?.artist || ''
         );
       },
+      onError: function(e) {
+        mlog('onError:', e.data);
+        const btn = document.getElementById('yt-btn-' + index);
+        if (e.data === 150 || e.data === 101) {
+          if (btn) {
+            btn.textContent = '⚠ Unavailable';
+            btn.disabled = true;
+            const searchUrl = 'https://www.youtube.com/results?search_query=' +
+              encodeURIComponent((songName + ' ' + artist).trim());
+            const link = document.createElement('a');
+            link.href = searchUrl;
+            link.target = '_blank';
+            link.rel = 'noopener noreferrer';
+            link.textContent = 'Search on YouTube ↗';
+            link.style.cssText = 'font-size:0.78rem;color:#888;text-decoration:underline';
+            btn.insertAdjacentElement('afterend', link);
+          }
+        } else {
+          if (btn) btn.textContent = '⚠ Error ' + e.data;
+        }
+      },
       onStateChange: function(e) {
+        mlog('stateChange:', e.data);
         const btn = document.getElementById('yt-btn-' + index);
         const indicator = document.getElementById('yt-indicator-' + index);
         if (e.data === YT.PlayerState.PLAYING) {
@@ -726,9 +780,12 @@ function createYTPlayer(index, videoId) {
       },
     },
   });
+  mlog('YT.Player constructor called');
 }
 
 window.toggleYT = function(index, videoId) {
+  mlog('toggleYT called, YT exists: ' + (typeof YT !== 'undefined'));
+  mlog('videoId value:', videoId);
   const btn = document.getElementById('yt-btn-' + index);
   const indicator = document.getElementById('yt-indicator-' + index);
   if (currentPlayingIndex === index && ytPlayers[index]) {
@@ -763,10 +820,14 @@ window.toggleYT = function(index, videoId) {
   currentIframePaused = false;
   if (btn) btn.textContent = '⏸ Pause';
   if (indicator) indicator.style.display = 'none';
-  createYTPlayer(index, videoId);
+  const _song = window._currentSongs?.[index];
+  const _songName = _song?.ncm?.name || _song?.song || _song?.query || '';
+  const _artist = _song?.ncm?.artist || _song?.artist || '';
+  createYTPlayer(index, videoId, _songName, _artist);
 };
 
 window.markPlayed = async function(btn) {
+  mlog('played btn clicked');
   btn.disabled = true;
   btn.textContent = '✓';
   btn.style.opacity = '0.4';
@@ -775,7 +836,8 @@ window.markPlayed = async function(btn) {
   const song_name = dashIdx !== -1 ? query.slice(0, dashIdx).trim() : query;
   const artist = dashIdx !== -1 ? query.slice(dashIdx + 3).trim() : '';
   try {
-    await api.played(song_name, artist, '');
+    const res = await api.played(song_name, artist, '');
+    mlog('played API done: ' + JSON.stringify(res));
   } catch (e) {
     // silent fail — button stays disabled
   }
