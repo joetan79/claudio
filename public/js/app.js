@@ -167,7 +167,7 @@ function renderRegisterForm() {
 
 // ── Player view ────────────────────────────────────────────────────────────
 function fillPlayer() {
-  window._currentSongs = state.nowPlaying?.play || [];
+  window._currentSongs = (state.nowPlaying?.play || []).filter(s => s.yt?.videoId);
   document.getElementById('view-content').innerHTML = renderPlayerContent();
   restorePlayerButtons();
   if (isIOS && !localStorage.getItem('ios_hint_shown')) {
@@ -444,6 +444,9 @@ function attachPlayerEvents() {
     attachPlayerEvents();
     try {
       const decision = await api.decide(msg);
+      if (decision.play?.some(s => !s.yt?.videoId)) {
+        decision.play = await ensureVideoIds(decision.play, decision.mood);
+      }
       state.nowPlaying = decision;
       if (input) input.value = '';
     } catch (err) {
@@ -524,9 +527,34 @@ function showError(el, msg) {
 }
 
 // ── Data loading ───────────────────────────────────────────────────────────
+async function ensureVideoIds(songs, mood) {
+  if (!songs?.length) return [];
+  const result = await Promise.all(songs.map(async (song) => {
+    if (song.yt?.videoId) return song;
+    const artist = song.ncm?.artist || song.artist || '';
+    const fallbacks = [
+      artist ? `${artist} popular` : null,
+      artist ? `${artist} music` : null,
+      mood ? `${mood} playlist` : null,
+    ].filter(Boolean);
+    for (const q of fallbacks) {
+      try {
+        const data = await api.request('GET', '/api/radio/ytsr?q=' + encodeURIComponent(q));
+        if (data.yt?.videoId) return { ...song, yt: data.yt };
+      } catch (_) {}
+    }
+    return null;
+  }));
+  return result.filter(Boolean);
+}
+
 async function loadNowPlaying() {
   try {
-    state.nowPlaying = await api.now();
+    const data = await api.now();
+    if (data.play?.some(s => !s.yt?.videoId)) {
+      data.play = await ensureVideoIds(data.play, data.mood);
+    }
+    state.nowPlaying = data;
   } catch {
     state.nowPlaying = null;
   }

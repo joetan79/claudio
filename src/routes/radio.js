@@ -54,7 +54,26 @@ router.post('/decide', async (req, res) => {
     ),
   ]);
 
-  const result = { ...decision, audioUrl: audioUrl ?? null, play: playWithUrls };
+  // Retry YouTube for songs missing videoId using artist/mood alternative queries
+  const play = await Promise.all(
+    playWithUrls.map(async (song) => {
+      if (song.yt?.videoId) return song;
+      const artist = song.ncm?.artist || song.artist || '';
+      const mood = decision.mood || '';
+      const fallbacks = [
+        artist ? `${artist} popular song` : null,
+        artist ? `${artist} music` : null,
+        mood ? `${mood} music popular` : null,
+      ].filter(Boolean);
+      for (const q of fallbacks) {
+        const yt = await searchYouTube(q).catch(() => null);
+        if (yt?.videoId) return { ...song, yt };
+      }
+      return song;
+    })
+  );
+
+  const result = { ...decision, audioUrl: audioUrl ?? null, play };
 
   db.prepare(
     'INSERT INTO memory (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at'
@@ -99,6 +118,13 @@ router.get('/plan', (req, res) => {
   }
 
   res.json({ morning: readPlan('plan_morning'), night: readPlan('plan_night') });
+});
+
+router.get('/ytsr', async (req, res) => {
+  const { q } = req.query;
+  if (!q) return res.status(400).json({ error: 'missing query' });
+  const yt = await searchYouTube(q).catch(() => null);
+  res.json({ yt: yt ?? null });
 });
 
 router.post('/plan/generate', async (req, res) => {
