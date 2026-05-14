@@ -745,9 +745,30 @@ function restorePlayerButtons() {
   } catch(e) {}
 }
 
-function createYTPlayer(index, videoId, songName, artist) {
+function markYTUnavailable(btn, songName, artist, index) {
+  if (!btn) return;
+  btn.textContent = '⚠ Unavailable';
+  btn.disabled = true;
+  if (!btn.nextElementSibling?.tagName === 'A') {
+    const searchUrl = 'https://www.youtube.com/results?search_query=' +
+      encodeURIComponent((songName + ' ' + artist).trim());
+    const link = document.createElement('a');
+    link.href = searchUrl;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    link.textContent = 'Search on YouTube ↗';
+    link.style.cssText = 'font-size:0.78rem;color:#888;text-decoration:underline';
+    btn.insertAdjacentElement('afterend', link);
+  }
+  // Advance queue if this song was playing in sequence
+  if (playQueue.length > 0 && playQueueIndex === index) {
+    setTimeout(() => { playQueueIndex++; playFromQueue(); }, 800);
+  }
+}
+
+function createYTPlayer(index, videoId, songName, artist, retryCount = 0) {
   if (!ytApiReady) {
-    setTimeout(() => createYTPlayer(index, videoId, songName, artist), 500);
+    setTimeout(() => createYTPlayer(index, videoId, songName, artist, retryCount), 500);
     return;
   }
   const container = document.getElementById('audio-container');
@@ -780,21 +801,31 @@ function createYTPlayer(index, videoId, songName, artist) {
         );
       },
       onError: function(e) {
-        mlog('onError:', e.data);
+        mlog('onError:', e.data, 'retry:', retryCount);
         const btn = document.getElementById('yt-btn-' + index);
         if (e.data === 150 || e.data === 101) {
-          if (btn) {
-            btn.textContent = '⚠ Unavailable';
-            btn.disabled = true;
-            const searchUrl = 'https://www.youtube.com/results?search_query=' +
-              encodeURIComponent((songName + ' ' + artist).trim());
-            const link = document.createElement('a');
-            link.href = searchUrl;
-            link.target = '_blank';
-            link.rel = 'noopener noreferrer';
-            link.textContent = 'Search on YouTube ↗';
-            link.style.cssText = 'font-size:0.78rem;color:#888;text-decoration:underline';
-            btn.insertAdjacentElement('afterend', link);
+          if (retryCount < 2) {
+            // Try a different video — lyric/live versions are usually less restricted
+            const retryQueries = [
+              `${songName} ${artist} lyric`,
+              `${songName} ${artist} live`,
+            ];
+            const q = retryQueries[retryCount];
+            if (btn) btn.textContent = '⏳ Loading...';
+            api.request('GET', '/api/radio/ytsr?q=' + encodeURIComponent(q))
+              .then(data => {
+                if (data.yt?.videoId && data.yt.videoId !== videoId) {
+                  if (window._currentSongs?.[index]) {
+                    window._currentSongs[index] = { ...window._currentSongs[index], yt: data.yt };
+                  }
+                  createYTPlayer(index, data.yt.videoId, songName, artist, retryCount + 1);
+                } else {
+                  markYTUnavailable(btn, songName, artist, index);
+                }
+              })
+              .catch(() => markYTUnavailable(btn, songName, artist, index));
+          } else {
+            markYTUnavailable(btn, songName, artist, index);
           }
         } else {
           if (btn) btn.textContent = '⚠ Error ' + e.data;

@@ -41,11 +41,13 @@ router.post('/decide', async (req, res) => {
 
   // TTS runs in parallel with song resolution.
   // Per song: NCM first → use normalized name+artist as YouTube query for accuracy.
-  const [audioUrl, playWithUrls] = await Promise.all([
+  const [audioUrl, rawSongs] = await Promise.all([
     synthesize(decision.say).catch(() => null),
     Promise.all(
       (decision.play || []).map(async (song) => {
         const ncm = await resolveSong(song.query).catch(() => null);
+        // NCM found the track but it has no streaming URL → copyright-restricted, skip it
+        if (ncm && !ncm.url) return null;
         const ytQuery = ncm ? `${ncm.name} ${ncm.artist}` : song.query;
         const yt = await searchYouTube(ytQuery).catch(() => null);
         const query = ncm ? `${ncm.name} - ${ncm.artist}` : song.query;
@@ -53,6 +55,7 @@ router.post('/decide', async (req, res) => {
       })
     ),
   ]);
+  const playWithUrls = rawSongs.filter(Boolean);
 
   // Retry YouTube for songs missing videoId using artist/mood alternative queries
   const play = await Promise.all(
