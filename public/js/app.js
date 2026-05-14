@@ -749,7 +749,7 @@ function markYTUnavailable(btn, songName, artist, index) {
   if (!btn) return;
   btn.textContent = '⚠ Unavailable';
   btn.disabled = true;
-  if (!btn.nextElementSibling?.tagName === 'A') {
+  if (btn.nextElementSibling?.tagName !== 'A') {
     const searchUrl = 'https://www.youtube.com/results?search_query=' +
       encodeURIComponent((songName + ' ' + artist).trim());
     const link = document.createElement('a');
