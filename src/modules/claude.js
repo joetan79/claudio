@@ -153,19 +153,31 @@ Example 5 — 用户疲惫，中文（慢下来，句子有呼吸感）:
     ? 'CRITICAL OVERRIDE: The listener wrote in English only. Your "say" field MUST be written entirely in English. Do not use any Chinese characters in "say".'
     : 'The listener wrote in Chinese. Your "say" field must be in Chinese.';
 
-  const response = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'x-api-key': process.env.ANTHROPIC_API_KEY,
-      'anthropic-version': '2023-06-01',
-      'content-type': 'application/json',
-    },
-    body: JSON.stringify({
-      model: process.env.CLAUDE_MODEL || 'claude-haiku-4-5',
-      max_tokens: 1024,
-      messages: [{ role: 'user', content: langInstruction + '\n\n' + prompt }],
-    }),
+  const body = JSON.stringify({
+    model: process.env.CLAUDE_MODEL || 'claude-haiku-4-5',
+    max_tokens: 1024,
+    messages: [{ role: 'user', content: langInstruction + '\n\n' + prompt }],
   });
+
+  let response;
+  const retryDelays = [3000, 8000, 15000];
+  for (let attempt = 0; attempt < 4; attempt++) {
+    if (attempt > 0) {
+      const delay = retryDelays[attempt - 1] ?? 15000;
+      console.warn(`[DJ] API overloaded, retry ${attempt}/3 in ${delay / 1000}s...`);
+      await new Promise(r => setTimeout(r, delay));
+    }
+    response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'x-api-key': process.env.ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01',
+        'content-type': 'application/json',
+      },
+      body,
+    });
+    if (response.status !== 529) break;
+  }
 
   if (!response.ok) {
     const err = await response.text();
