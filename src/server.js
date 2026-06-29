@@ -14,6 +14,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+const HOST = process.env.HOST || '127.0.0.1';
 
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
@@ -51,6 +52,6 @@ app.get('*', (req, res) => {
 getSystemDb();
 startScheduler();
 
-app.listen(PORT, () => {
-  console.log(`Claudio running on :${PORT}`);
+app.listen(PORT, HOST, () => {
+  console.log(`Claudio running on ${HOST}:${PORT}`);
 });
