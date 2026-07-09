@@ -2,6 +2,7 @@ import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import { getSystemDb } from '../db/index.js';
 import { requireAdmin } from '../middleware/admin.js';
+import { getDjVoices, setDjVoices } from '../modules/settings.js';
 
 const router = Router();
 router.use(requireAdmin);
@@ -116,6 +117,30 @@ router.delete('/users/:uid', (req, res) => {
   const db = getSystemDb();
   const result = db.prepare('DELETE FROM users WHERE id = ?').run(req.params.uid);
   if (result.changes === 0) return res.status(404).json({ error: 'User not found' });
+  res.json({ ok: true });
+});
+
+router.get('/voices', (req, res) => {
+  res.json({ voices: getDjVoices() });
+});
+
+router.put('/voices', (req, res) => {
+  const { voices } = req.body ?? {};
+  if (!Array.isArray(voices) || voices.length === 0 || voices.length > 4)
+    return res.status(400).json({ error: 'voices must be an array of 1 to 4 entries' });
+
+  for (const v of voices) {
+    if (!v || typeof v.id !== 'string' || !v.id.trim() ||
+        typeof v.name !== 'string' || !v.name.trim() ||
+        typeof v.ref !== 'string' || !v.ref.trim()) {
+      return res.status(400).json({ error: 'each voice needs id, name, and ref' });
+    }
+  }
+  const ids = new Set(voices.map(v => v.id));
+  if (ids.size !== voices.length)
+    return res.status(400).json({ error: 'voice ids must be unique' });
+
+  setDjVoices(voices);
   res.json({ ok: true });
 });
 

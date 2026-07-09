@@ -128,6 +128,7 @@
   let usageDaily = null;
   let chartUsers = null;
   let chartDaily = null;
+  let voicesData = null;
 
   function fmtDate(ts) {
     if (!ts) return '—';
@@ -156,6 +157,7 @@
     // Verify admin role by hitting /api/admin/users
     const result = await apiFetch('GET', '/api/admin/users');
     usersData = result;
+    voicesData = await apiFetch('GET', '/api/admin/voices').catch(() => ({ voices: [] }));
     render();
   }
 
@@ -298,6 +300,24 @@
 </div>
 <div class="usage-section">
   <div class="usage-header">
+    <span class="usage-title">DJ Voices</span>
+  </div>
+  <div class="table-wrap" style="padding:18px">
+    ${[0, 1, 2, 3].map(i => `
+    <div class="voice-row" style="display:flex;gap:10px;margin-bottom:10px;align-items:center">
+      <input type="text" class="voice-name" id="voice-name-${i}" placeholder="Name"
+        value="${(voicesData?.voices?.[i]?.name || '').replace(/"/g, '&quot;')}"
+        style="flex:1;background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:9px 12px;font-size:0.88rem" />
+      <input type="text" class="voice-ref" id="voice-ref-${i}" placeholder="Fish reference_id"
+        value="${(voicesData?.voices?.[i]?.ref || '').replace(/"/g, '&quot;')}"
+        style="flex:1.4;background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:9px 12px;font-size:0.88rem;font-family:monospace" />
+    </div>`).join('')}
+    <button class="btn-action btn-role" id="btn-save-voices" style="margin-top:8px">Save Voices</button>
+    <span id="voices-save-msg" style="display:none;color:var(--success);font-size:0.85rem;margin-left:10px">Saved!</span>
+  </div>
+</div>
+<div class="usage-section">
+  <div class="usage-header">
     <span class="usage-title">Usage</span>
     <div class="range-toggle">
       <button class="range-btn ${usageDays === 7 ? 'active' : ''}" data-days="7">7d</button>
@@ -323,7 +343,32 @@
     document.querySelectorAll('.range-btn').forEach(btn => {
       btn.addEventListener('click', () => setUsageDays(Number(btn.dataset.days)));
     });
+    document.getElementById('btn-save-voices')?.addEventListener('click', saveVoices);
     loadUsage();
+  }
+
+  async function saveVoices() {
+    const rows = [0, 1, 2, 3].map(i => ({
+      name: document.getElementById(`voice-name-${i}`).value.trim(),
+      ref: document.getElementById(`voice-ref-${i}`).value.trim(),
+    })).filter(r => r.name && r.ref);
+    if (rows.length === 0) { alert('At least one voice (name + reference_id) is required.'); return; }
+    const voices = rows.map((r, idx) => ({ id: `voice${idx + 1}`, name: r.name, ref: r.ref }));
+    const btn = document.getElementById('btn-save-voices');
+    btn.disabled = true;
+    try {
+      await apiFetch('PUT', '/api/admin/voices', { voices });
+      voicesData = { voices };
+      const msg = document.getElementById('voices-save-msg');
+      if (msg) {
+        msg.style.display = 'inline';
+        setTimeout(() => { msg.style.display = 'none'; }, 2000);
+      }
+    } catch (e) {
+      alert('Error: ' + e.message);
+    } finally {
+      btn.disabled = false;
+    }
   }
 
   async function loadUsage() {
@@ -438,6 +483,7 @@
         const data = await apiFetch('GET', '/api/auth/me');
         currentUser = { uid: data.uid, username: data.username };
         usersData = await apiFetch('GET', '/api/admin/users');
+        voicesData = await apiFetch('GET', '/api/admin/voices').catch(() => ({ voices: [] }));
         renderDashboard();
       } catch (e) {
         if (e.status === 401 || e.status === 403) {

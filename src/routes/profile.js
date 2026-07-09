@@ -5,6 +5,8 @@ import { fileURLToPath } from 'url';
 import { requireAuth } from '../middleware/auth.js';
 import { getSystemDb, getUserDb } from '../db/index.js';
 import { encrypt, decrypt, isEncryptionEnabled, maskKey } from '../modules/crypto.js';
+import { getDjVoices, getUserVoiceId } from '../modules/settings.js';
+import { synthesize } from '../modules/tts.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.resolve(__dirname, '../../data');
@@ -13,6 +15,7 @@ const router = Router();
 router.use(requireAuth);
 
 const MAX_LEN = 5000;
+const VOICE_PREVIEW_TEXT = '你好，我是你的 DJ';
 
 function userFilePath(uid, filename) {
   return path.join(DATA_DIR, 'users', uid, filename);
@@ -100,6 +103,42 @@ router.put('/keys', (req, res) => {
     db.prepare('UPDATE users SET fish_key = ? WHERE id = ?').run(value, req.user.uid);
   }
   res.json({ ok: true });
+});
+
+router.get('/voices', (req, res) => {
+  const voices = getDjVoices().map(v => ({ id: v.id, name: v.name }));
+  const current = getUserVoiceId(req.user.uid) || voices[0]?.id || null;
+  res.json({ voices, current });
+});
+
+router.put('/voice', (req, res) => {
+  const { voice } = req.body ?? {};
+  if (!voice || typeof voice !== 'string')
+    return res.status(400).json({ error: 'voice is required' });
+
+  const voices = getDjVoices();
+  if (!voices.some(v => v.id === voice))
+    return res.status(400).json({ error: 'unknown voice id' });
+
+  const db = getSystemDb();
+  db.prepare('UPDATE users SET dj_voice = ? WHERE id = ?').run(voice, req.user.uid);
+  res.json({ ok: true });
+});
+
+router.post('/voice/preview', async (req, res) => {
+  const { voice } = req.body ?? {};
+  const voices = getDjVoices();
+  const entry = voice ? voices.find(v => v.id === voice) : voices[0];
+  if (!entry) return res.status(400).json({ error: 'unknown voice id' });
+
+  try {
+    const audioUrl = await synthesize(VOICE_PREVIEW_TEXT, { uid: req.user.uid, voiceRef: entry.ref });
+    if (!audioUrl) return res.status(502).json({ error: 'TTS failed' });
+    res.json({ audioUrl });
+  } catch (e) {
+    if (e.code === 'OWN_KEY_INVALID') return res.status(e.status || 401).json({ error: e.message, code: 'OWN_KEY_INVALID' });
+    throw e;
+  }
 });
 
 router.get('/me', (req, res) => {

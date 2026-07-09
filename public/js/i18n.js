@@ -55,6 +55,10 @@ const LANGS = {
     keyCleared: 'Cleared',
     ownKeyInvalid: 'Your API Key is invalid. Please check it under Profile > API Keys.',
     byoKeyDisabled: 'BYO API Key is not enabled on this server.',
+    djVoice: 'DJ Voice',
+    djVoiceDesc: 'Choose the voice your DJ speaks with.',
+    preview: 'Preview',
+    previewing: 'Playing...',
   },
   zh: {
     appName: 'Claudio',
@@ -112,6 +116,10 @@ const LANGS = {
     keyCleared: '已清除',
     ownKeyInvalid: '您的 API Key 无效，请前往"我的 > API Keys"检查',
     byoKeyDisabled: '本服务器未启用自定义 API Key 功能',
+    djVoice: 'DJ 声音',
+    djVoiceDesc: '选择你的 DJ 说话时使用的声音。',
+    preview: '试听',
+    previewing: '播放中...',
   },
 };
 

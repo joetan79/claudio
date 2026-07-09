@@ -45,11 +45,15 @@ const state = {
   user: null,
   view: 'auth',       // 'auth' | 'player' | 'profile'
   authTab: 'login',   // 'login' | 'register'
-  profileTab: 'taste', // 'taste' | 'routines' | 'history' | 'keys'
+  profileTab: 'taste', // 'taste' | 'routines' | 'history' | 'keys' | 'voice'
   nowPlaying: null,
   loading: false,
   error: null,
-  profileData: { taste: '', routines: '', history: [], keys: { anthropic: null, fish: null } },
+  profileData: {
+    taste: '', routines: '', history: [],
+    keys: { anthropic: null, fish: null },
+    voices: { voices: [], current: null },
+  },
 };
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -271,6 +275,7 @@ function renderProfileContent() {
   <button class="profile-tab ${state.profileTab === 'routines' ? 'active' : ''}" data-tab="routines">${esc(i18n.t('routines'))}</button>
   <button class="profile-tab ${state.profileTab === 'history' ? 'active' : ''}" data-tab="history">${esc(i18n.t('history'))}</button>
   <button class="profile-tab ${state.profileTab === 'keys' ? 'active' : ''}" data-tab="keys">${esc(i18n.t('apiKeys'))}</button>
+  <button class="profile-tab ${state.profileTab === 'voice' ? 'active' : ''}" data-tab="voice">${esc(i18n.t('djVoice'))}</button>
 </div>
 ${renderProfileTab()}`;
 }
@@ -328,6 +333,25 @@ function renderProfileTab() {
     <button class="btn-clear" id="btn-clear-fish-key">${esc(i18n.t('clearKey'))}</button>
     <span class="save-confirm" id="fish-key-confirm" style="display:none"></span>
   </div>
+</div>`;
+  }
+  if (state.profileTab === 'voice') {
+    const v = state.profileData.voices || { voices: [], current: null };
+    return `
+<div>
+  <div class="section-title">${esc(i18n.t('djVoice'))}</div>
+  <div class="section-desc">${esc(i18n.t('djVoiceDesc'))}</div>
+  <div class="voice-list">
+    ${v.voices.map(voice => `
+    <div class="voice-option">
+      <label class="voice-radio-label">
+        <input type="radio" name="dj-voice" value="${esc(voice.id)}" ${voice.id === v.current ? 'checked' : ''} />
+        <span>${esc(voice.name)}</span>
+      </label>
+      <button class="btn-preview" data-voice="${esc(voice.id)}">${esc(i18n.t('preview'))}</button>
+    </div>`).join('')}
+  </div>
+  <span class="save-confirm" id="voice-confirm" style="display:none">${esc(i18n.t('saved'))}</span>
 </div>`;
   }
   // history
@@ -518,6 +542,7 @@ function attachProfileEvents() {
       state.profileTab = tab.dataset.tab;
       if (state.profileTab === 'history') await loadHistory();
       if (state.profileTab === 'keys') await loadKeys();
+      if (state.profileTab === 'voice') await loadVoices();
       fillProfile();
       attachProfileEvents();
     });
@@ -559,6 +584,41 @@ function attachProfileEvents() {
 
   wireKeyButtons('anthropic');
   wireKeyButtons('fish');
+
+  document.querySelectorAll('input[name="dj-voice"]').forEach(radio => {
+    radio.addEventListener('change', async () => {
+      const voiceId = radio.value;
+      try {
+        await api.saveVoice(voiceId);
+        state.profileData.voices.current = voiceId;
+        const confirm = document.getElementById('voice-confirm');
+        if (confirm) {
+          confirm.style.display = 'inline-block';
+          setTimeout(() => { confirm.style.display = 'none'; }, 2000);
+        }
+      } catch (err) {
+        alert(err.message || i18n.t('errorServer'));
+      }
+    });
+  });
+
+  document.querySelectorAll('.btn-preview').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const voiceId = btn.dataset.voice;
+      const original = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = i18n.t('previewing');
+      try {
+        const data = await api.previewVoice(voiceId);
+        if (data.audioUrl) playDJAudio(data.audioUrl);
+      } catch (err) {
+        alert(err.message || i18n.t('errorServer'));
+      } finally {
+        btn.disabled = false;
+        btn.textContent = original;
+      }
+    });
+  });
 }
 
 function wireKeyButtons(kind) {
@@ -672,6 +732,15 @@ async function loadKeys() {
   try {
     const data = await api.getKeys();
     state.profileData.keys = { anthropic: data.anthropic || null, fish: data.fish || null };
+  } catch (err) {
+    console.error(err);
+  }
+}
+
+async function loadVoices() {
+  try {
+    const data = await api.getVoices();
+    state.profileData.voices = { voices: data.voices || [], current: data.current || null };
   } catch (err) {
     console.error(err);
   }

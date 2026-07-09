@@ -4,12 +4,13 @@ import crypto from 'crypto';
 import { getSystemDb } from '../db/index.js';
 import { decrypt, isEncryptionEnabled } from './crypto.js';
 import { recordUsage } from './usage.js';
+import { resolveVoiceRef } from './settings.js';
 
 const CACHE_DIR = '/home/claudeProj/claudio/data/tts';
 if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR, { recursive: true });
 
-function hashText(text) {
-  return crypto.createHash('md5').update(text).digest('hex');
+function hashText(text, voiceRef) {
+  return crypto.createHash('md5').update(`${text}|${voiceRef || ''}`).digest('hex');
 }
 
 function getUserFishKey(uid) {
@@ -26,14 +27,15 @@ function getUserFishKey(uid) {
 }
 
 export async function synthesize(text, options = {}) {
-  const { uid } = options;
+  const { uid, voiceRef } = options;
   const userKey = getUserFishKey(uid);
   const apiKey = userKey || process.env.FISH_TTS_KEY;
   const ownKey = !!userKey;
 
   if (!text || !apiKey) return null;
 
-  const hash = hashText(text);
+  const ref = voiceRef || resolveVoiceRef(null);
+  const hash = hashText(text, ref);
   const filePath = path.join(CACHE_DIR, `${hash}.mp3`);
 
   if (fs.existsSync(filePath)) return `/api/tts/${hash}.mp3`;
@@ -47,7 +49,7 @@ export async function synthesize(text, options = {}) {
       },
       body: JSON.stringify({
         text,
-        reference_id: process.env.FISH_TTS_VOICE,
+        reference_id: ref,
         format: 'mp3',
         latency: 'normal',
       }),

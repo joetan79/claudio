@@ -5,6 +5,7 @@ import { djDecision, getTimeOfDay } from '../modules/claude.js';
 import { synthesize } from '../modules/tts.js';
 import { resolveSong, getSongUrl } from '../modules/ncm.js';
 import { searchYouTube } from '../modules/youtube.js';
+import { resolveVoiceRefForUser } from '../modules/settings.js';
 
 const router = Router();
 
@@ -50,7 +51,7 @@ router.post('/decide', async (req, res) => {
   let audioUrl, playWithUrls;
   try {
     [audioUrl, playWithUrls] = await Promise.all([
-      synthesize(decision.say, { uid }).catch(e => {
+      synthesize(decision.say, { uid, voiceRef: resolveVoiceRefForUser(uid) }).catch(e => {
         if (e.code === 'OWN_KEY_INVALID') throw e;
         return null;
       }),
@@ -157,7 +158,7 @@ router.post('/plan/generate', async (req, res) => {
   let decision, audioUrl;
   try {
     decision = await djDecision(uid, message, context);
-    audioUrl = await synthesize(decision.say, { uid }).catch(e => {
+    audioUrl = await synthesize(decision.say, { uid, voiceRef: resolveVoiceRefForUser(uid) }).catch(e => {
       if (e.code === 'OWN_KEY_INVALID') throw e;
       return null;
     });

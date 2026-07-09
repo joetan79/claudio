@@ -48,6 +48,12 @@ export function getSystemDb() {
     );
 
     CREATE INDEX IF NOT EXISTS idx_usage_uid_ts ON usage(uid, ts);
+
+    CREATE TABLE IF NOT EXISTS settings (
+      key        TEXT PRIMARY KEY,
+      value      TEXT,
+      updated_at INTEGER
+    );
   `);
 
   // Add role column to existing DBs (no-op on new ones)
@@ -59,6 +65,17 @@ export function getSystemDb() {
   // Add BYO API key columns to existing DBs (no-op on new ones)
   try { systemDb.exec(`ALTER TABLE users ADD COLUMN anthropic_key TEXT`); } catch {}
   try { systemDb.exec(`ALTER TABLE users ADD COLUMN fish_key TEXT`); } catch {}
+
+  // Add DJ voice selection column to existing DBs (no-op on new ones)
+  try { systemDb.exec(`ALTER TABLE users ADD COLUMN dj_voice TEXT DEFAULT NULL`); } catch {}
+
+  // Seed default DJ voice config on first start
+  const voicesRow = systemDb.prepare(`SELECT value FROM settings WHERE key = 'dj_voices'`).get();
+  if (!voicesRow) {
+    const defaultVoices = [{ id: 'voice1', name: 'Claudio 经典', ref: process.env.FISH_TTS_VOICE || '' }];
+    systemDb.prepare(`INSERT INTO settings (key, value, updated_at) VALUES ('dj_voices', ?, ?)`)
+      .run(JSON.stringify(defaultVoices), Date.now());
+  }
 
   // Auto-create admin account on first start
   const adminExists = systemDb.prepare(`SELECT id FROM users WHERE role = 'admin'`).get();
