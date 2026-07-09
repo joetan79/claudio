@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Claudio — Download</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg: #0a0a0a; --surface: #141414; --surface2: #1e1e1e;
+    --border: #2a2a2a; --text: #ffffff; --muted: #888888;
+    --accent: #c8a96e; --accent-dim: rgba(200,169,110,0.15);
+    --radius: 12px; --radius-sm: 8px;
+  }
+  html, body { min-height: 100%; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-size: 16px; line-height: 1.5; -webkit-font-smoothing: antialiased; }
+  #dl-app { max-width: 480px; margin: 0 auto; min-height: 100vh; display: flex; flex-direction: column; }
+
+  .topbar { display: flex; align-items: center; justify-content: space-between;
+    padding: 16px; border-bottom: 1px solid var(--border); }
+  .topbar-title { font-size: 1.1rem; font-weight: 700; color: var(--accent); letter-spacing: 0.02em;
+    text-decoration: none; }
+  .btn-lang { background: none; border: none; color: var(--accent); font-size: 0.8rem;
+    cursor: pointer; padding: 4px 8px; border-radius: 4px; transition: background 0.15s; }
+  .btn-lang:hover { background: var(--accent-dim); }
+
+  .content { flex: 1; padding: 40px 24px; display: flex; flex-direction: column; align-items: center; text-align: center; }
+
+  .logo-badge { width: 72px; height: 72px; border-radius: 18px; background: var(--surface);
+    border: 1px solid var(--border); display: flex; align-items: center; justify-content: center;
+    font-size: 2rem; font-weight: 800; color: var(--accent); margin-bottom: 20px; }
+
+  h1 { font-size: 1.4rem; font-weight: 700; margin-bottom: 8px; }
+  .subtitle { color: var(--muted); font-size: 0.92rem; margin-bottom: 32px; }
+
+  .btn-download { display: inline-flex; align-items: center; gap: 10px; background: var(--accent);
+    color: #0a0a0a; border: none; border-radius: var(--radius-sm); font-size: 1.05rem; font-weight: 700;
+    padding: 16px 32px; cursor: pointer; text-decoration: none; transition: opacity 0.15s; margin-bottom: 20px; }
+  .btn-download:hover { opacity: 0.9; }
+  .btn-download svg { width: 20px; height: 20px; }
+
+  .hint-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 18px 20px; text-align: left; width: 100%; margin-top: 8px; }
+  .hint-card .hint-title { font-size: 0.85rem; font-weight: 700; color: var(--accent);
+    text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 10px; }
+  .hint-card ol { padding-left: 20px; color: var(--text); font-size: 0.92rem; }
+  .hint-card ol li { margin-bottom: 8px; }
+  .hint-card ol li:last-child { margin-bottom: 0; }
+  .hint-card p { font-size: 0.88rem; color: var(--muted); }
+
+  .qr-wrap { background: #ffffff; border-radius: var(--radius); padding: 20px; margin-bottom: 20px; }
+  .qr-wrap img { display: block; width: 220px; height: 220px; }
+
+  .steps { display: flex; flex-direction: column; gap: 6px; }
+</style>
+</head>
+<body>
+<div id="dl-app">
+  <div class="topbar">
+    <a href="/" class="topbar-title" id="dl-title">Claudio</a>
+    <button class="btn-lang" id="dl-btn-lang">中文</button>
+  </div>
+  <div class="content" id="dl-content"></div>
+</div>
+<script>
+  const LANGS = {
+    en: {
+      title: 'Claudio',
+      tagline: 'Your personal AI radio, on your phone.',
+      androidBtn: 'Download APK',
+      androidHint: 'This app is distributed outside Google Play, so Android will warn you before installing. Tap "Install anyway" / allow "Install from unknown sources" when prompted.',
+      androidHintTitle: 'How to install',
+      iosTitle: 'Add to Home Screen',
+      iosStep1: 'Open this page in Safari (not another browser)',
+      iosStep2: 'Tap the Share button at the bottom of the screen',
+      iosStep3: 'Scroll down and tap "Add to Home Screen"',
+      desktopTitle: 'Scan to download on your phone',
+      desktopHint: 'Open the camera app on your phone and point it at the QR code above.',
+    },
+    zh: {
+      title: 'Claudio',
+      tagline: '你的专属 AI 电台，装进手机。',
+      androidBtn: '下载 APK',
+      androidHint: '本应用不通过 Google Play 分发，安装时系统会提示风险，请在弹窗中选择"仍要安装" / 允许"安装未知来源应用"。',
+      androidHintTitle: '安装说明',
+      iosTitle: '添加到主屏幕',
+      iosStep1: '请用 Safari 浏览器打开本页面（其他浏览器不支持）',
+      iosStep2: '点击屏幕底部的分享按钮',
+      iosStep3: '向下滚动，点击"添加到主屏幕"',
+      desktopTitle: '用手机扫码下载',
+      desktopHint: '打开手机相机，对准上方二维码扫描。',
+    },
+  };
+
+  const i18n = {
+    current: localStorage.getItem('claudio_lang') || 'en',
+    t(key) { return LANGS[this.current][key] ?? key; },
+    toggle() {
+      this.current = this.current === 'en' ? 'zh' : 'en';
+      localStorage.setItem('claudio_lang', this.current);
+    },
+  };
+
+  function detectPlatform() {
+    const ua = navigator.userAgent || '';
+    if (/Android/i.test(ua)) return 'android';
+    if (/iPad|iPhone|iPod/i.test(ua) && !window.MSStream) return 'ios';
+    return 'desktop';
+  }
+
+  function renderAndroid() {
+    return `
+<div class="logo-badge">C</div>
+<h1>${i18n.t('title')}</h1>
+<p class="subtitle">${i18n.t('tagline')}</p>
+<a class="btn-download" href="/downloads/claudio.apk" download>
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0l-4-4m4 4l4-4M5 21h14"/></svg>
+  ${i18n.t('androidBtn')}
+</a>
+<div class="hint-card">
+  <div class="hint-title">${i18n.t('androidHintTitle')}</div>
+  <p>${i18n.t('androidHint')}</p>
+</div>`;
+  }
+
+  function renderIOS() {
+    return `
+<div class="logo-badge">C</div>
+<h1>${i18n.t('title')}</h1>
+<p class="subtitle">${i18n.t('tagline')}</p>
+<div class="hint-card">
+  <div class="hint-title">${i18n.t('iosTitle')}</div>
+  <ol class="steps">
+    <li>${i18n.t('iosStep1')}</li>
+    <li>${i18n.t('iosStep2')}</li>
+    <li>${i18n.t('iosStep3')}</li>
+  </ol>
+</div>`;
+  }
+
+  function renderDesktop() {
+    return `
+<div class="logo-badge">C</div>
+<h1>${i18n.t('desktopTitle')}</h1>
+<p class="subtitle">${i18n.t('tagline')}</p>
+<div class="qr-wrap">
+  <img src="/img/qr-download.png" alt="QR code" />
+</div>
+<p class="subtitle" style="margin-bottom:0">${i18n.t('desktopHint')}</p>`;
+  }
+
+  function render() {
+    document.getElementById('dl-title').textContent = i18n.t('title');
+    const platform = detectPlatform();
+    const html = platform === 'android' ? renderAndroid()
+      : platform === 'ios' ? renderIOS()
+      : renderDesktop();
+    document.getElementById('dl-content').innerHTML = html;
+    document.getElementById('dl-btn-lang').textContent = i18n.current === 'en' ? '中文' : 'English';
+  }
+
+  document.getElementById('dl-btn-lang').addEventListener('click', () => {
+    i18n.toggle();
+    render();
+  });
+
+  render();
+</script>
+</body>
+</html>

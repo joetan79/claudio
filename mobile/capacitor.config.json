@@ -1,0 +1,12 @@
+{
+  "appId": "cloud.abai.claudio",
+  "appName": "Claudio",
+  "webDir": "www",
+  "server": {
+    "url": "https://claudio.abai.cloud",
+    "cleartext": false
+  },
+  "android": {
+    "allowMixedContent": false
+  }
+}

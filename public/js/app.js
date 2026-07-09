@@ -95,6 +95,9 @@ function renderShell() {
   <span class="topbar-title">${esc(i18n.t('appName'))}</span>
   <div style="display:flex;align-items:center;gap:12px">
     ${username ? `<span class="topbar-user">${username}</span>` : ''}
+    <button class="btn-download-app" id="btn-download-app" title="${esc(i18n.t('downloadApp'))}">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0l-4-4m4 4l4-4M5 21h14"/></svg>
+    </button>
     <button class="btn-lang" id="btn-lang">${esc(i18n.t('langToggle'))}</button>
   </div>
 </div>
@@ -118,7 +121,12 @@ function renderAuth() {
 <div class="view auth-view">
   <div class="topbar">
     <span class="topbar-title">${esc(i18n.t('appName'))}</span>
-    <button class="btn-lang" id="btn-lang">${esc(i18n.t('langToggle'))}</button>
+    <div style="display:flex;align-items:center;gap:12px">
+      <button class="btn-download-app" id="btn-download-app" title="${esc(i18n.t('downloadApp'))}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0l-4-4m4 4l4-4M5 21h14"/></svg>
+      </button>
+      <button class="btn-lang" id="btn-lang">${esc(i18n.t('langToggle'))}</button>
+    </div>
   </div>
   <div class="auth-logo">
     <h1>${esc(i18n.t('appName'))}</h1>
@@ -381,6 +389,11 @@ function attachEvents() {
       render();
     });
   }
+
+  // Download app (exists in both auth and shell)
+  document.getElementById('btn-download-app')?.addEventListener('click', () => {
+    window.open('/download.html', '_blank');
+  });
 
   if (state.view === 'auth') {
     attachAuthEvents();

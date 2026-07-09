@@ -3,3 +3,8 @@ data/
 node_modules/
 logs/
 .claude/
+
+mobile/android/app/build/
+mobile/node_modules/
+mobile/*.keystore
+mobile/keystore.properties

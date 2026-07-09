@@ -59,6 +59,7 @@ const LANGS = {
     djVoiceDesc: 'Choose the voice your DJ speaks with.',
     preview: 'Preview',
     previewing: 'Playing...',
+    downloadApp: 'Download App',
   },
   zh: {
     appName: 'Claudio',
@@ -120,6 +121,7 @@ const LANGS = {
     djVoiceDesc: '选择你的 DJ 说话时使用的声音。',
     preview: '试听',
     previewing: '播放中...',
+    downloadApp: '下载 App',
   },
 };
 

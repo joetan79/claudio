@@ -74,6 +74,12 @@ html, body {
 }
 .btn-lang:hover { background: var(--accent-dim); }
 
+.btn-download-app { background: none; border: none; color: var(--accent);
+  cursor: pointer; padding: 4px; border-radius: 4px; display: flex;
+  align-items: center; justify-content: center; transition: background 0.15s; }
+.btn-download-app svg { width: 20px; height: 20px; }
+.btn-download-app:hover { background: var(--accent-dim); }
+
 /* ── Bottom nav ── */
 .bottomnav {
   position: fixed;

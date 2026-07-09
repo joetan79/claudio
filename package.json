@@ -18,5 +18,8 @@
     "ws": "^8.17.0",
     "youtubei.js": "^17.2.0",
     "ytsr": "^3.8.4"
+  },
+  "devDependencies": {
+    "qrcode": "^1.5.4"
   }
 }

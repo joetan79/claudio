@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Claudio</string>
+    <string name="title_activity_main">Claudio</string>
+    <string name="package_name">cloud.abai.claudio</string>
+    <string name="custom_url_scheme">cloud.abai.claudio</string>
+</resources>
