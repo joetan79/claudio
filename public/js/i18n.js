@@ -43,6 +43,7 @@ const LANGS = {
     playAll: 'Play All',
     next: 'Next',
     tapAgain: '👆 Tap again',
+    sessionRevoked: 'Your account was signed in on another device. This session has been logged out.',
   },
   zh: {
     appName: 'Claudio',
@@ -88,6 +89,7 @@ const LANGS = {
     playAll: '全部播放',
     next: '下一首',
     tapAgain: '👆 再点一次',
+    sessionRevoked: '您的账户已在其他设备登录，本设备已被登出',
   },
 };
 

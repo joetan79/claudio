@@ -39,6 +39,9 @@ export function getSystemDb() {
   // Add role column to existing DBs (no-op on new ones)
   try { systemDb.exec(`ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'`); } catch {}
 
+  // Add status column to existing DBs (no-op on new ones)
+  try { systemDb.exec(`ALTER TABLE users ADD COLUMN status TEXT NOT NULL DEFAULT 'active'`); } catch {}
+
   // Auto-create admin account on first start
   const adminExists = systemDb.prepare(`SELECT id FROM users WHERE role = 'admin'`).get();
   if (!adminExists) {

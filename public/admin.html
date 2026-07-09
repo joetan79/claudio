@@ -69,13 +69,19 @@
       font-size: 0.75rem; font-weight: 600; }
     .badge-active { background: rgba(76,175,80,0.15); color: var(--success); }
     .badge-inactive { background: rgba(136,136,136,0.15); color: var(--muted); }
+    .badge-disabled { background: rgba(224,92,92,0.15); color: var(--danger); }
     .badge-admin { background: var(--accent-dim); color: var(--accent); }
+
+    /* Disabled user row */
+    tr.row-disabled td { opacity: 0.5; }
 
     /* Action buttons */
     .btn-action { padding: 4px 10px; border-radius: 4px; font-size: 0.78rem;
       cursor: pointer; border: 1px solid; margin-right: 6px; transition: opacity 0.15s; }
     .btn-action:hover { opacity: 0.75; }
     .btn-reset { border-color: var(--border); color: var(--muted); background: transparent; }
+    .btn-status { border-color: var(--border); color: var(--muted); background: transparent; }
+    .btn-role { border-color: var(--accent); color: var(--accent); background: transparent; }
     .btn-delete { border-color: var(--danger); color: var(--danger); background: transparent; }
 
     /* Misc */
@@ -163,6 +169,24 @@
     } catch (e) { alert('Error: ' + e.message); }
   }
 
+  async function toggleStatus(uid, currentStatus) {
+    const newStatus = currentStatus === 'disabled' ? 'active' : 'disabled';
+    if (!confirm(`${newStatus === 'disabled' ? 'Disable' : 'Enable'} this user?`)) return;
+    try {
+      await apiFetch('PUT', `/api/admin/users/${uid}/status`, { status: newStatus });
+      await loadUsers();
+    } catch (e) { alert('Error: ' + e.message); }
+  }
+
+  async function toggleRole(uid, currentRole) {
+    const newRole = currentRole === 'admin' ? 'user' : 'admin';
+    if (!confirm(`${newRole === 'admin' ? 'Grant admin to' : 'Demote'} this user?`)) return;
+    try {
+      await apiFetch('PUT', `/api/admin/users/${uid}/role`, { role: newRole });
+      await loadUsers();
+    } catch (e) { alert('Error: ' + e.message); }
+  }
+
   function renderLogin(errorMsg) {
     document.getElementById('app').innerHTML = `
 <div class="auth-wrap">
@@ -200,15 +224,17 @@
     const d = usersData;
     if (!d) return;
     const rows = d.users.map(u => `
-<tr>
+<tr class="${u.status === 'disabled' ? 'row-disabled' : ''}">
   <td style="color:var(--muted);font-size:0.78rem">${u.username}</td>
   <td>${u.email}</td>
   <td><span class="badge badge-${u.role === 'admin' ? 'admin' : 'inactive'}">${u.role}</span></td>
   <td>${fmtDate(u.created_at)}</td>
   <td>${fmtDate(u.last_login)}</td>
-  <td><span class="badge badge-${u.status}">${u.status}</span></td>
+  <td><span class="badge badge-${u.status === 'disabled' ? 'disabled' : 'active'}">${u.status}</span></td>
   <td>
     <button class="btn-action btn-reset" onclick="resetPassword('${u.id}','${u.username.replace(/'/g,"\\'")}')">Reset PW</button>
+    ${u.id !== currentUser?.uid ? `<button class="btn-action btn-status" onclick="toggleStatus('${u.id}','${u.status}')">${u.status === 'disabled' ? 'Enable' : 'Disable'}</button>` : ''}
+    ${u.id !== currentUser?.uid ? `<button class="btn-action btn-role" onclick="toggleRole('${u.id}','${u.role}')">${u.role === 'admin' ? 'Demote' : 'Set as Admin'}</button>` : ''}
     ${u.id !== currentUser?.uid ? `<button class="btn-action btn-delete" onclick="deleteUser('${u.id}','${u.username.replace(/'/g,"\\'")}')">Delete</button>` : ''}
   </td>
 </tr>`).join('');

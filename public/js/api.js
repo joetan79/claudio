@@ -19,7 +19,20 @@ const api = {
       throw err;
     }
     const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Request failed');
+    if (!res.ok) {
+      if (res.status === 401 && data.code === 'SESSION_REVOKED') {
+        this.clearToken();
+        alert(i18n.t('sessionRevoked'));
+        if (typeof state !== 'undefined') {
+          state.user = null;
+          state.nowPlaying = null;
+          state.view = 'auth';
+          state.authTab = 'login';
+        }
+        if (typeof render === 'function') render();
+      }
+      throw new Error(data.error || 'Request failed');
+    }
     return data;
   },
 
@@ -32,6 +45,9 @@ const api = {
   },
   me() {
     return this.request('GET', '/api/auth/me');
+  },
+  logout() {
+    return this.request('POST', '/api/auth/logout');
   },
 
   // Radio

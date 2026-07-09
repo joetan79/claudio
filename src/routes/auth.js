@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+import crypto from 'crypto';
 import { v4 as uuidv4 } from 'uuid';
 import { getSystemDb, initUserDir } from '../db/index.js';
 import { requireAuth } from '../middleware/auth.js';
@@ -9,6 +10,7 @@ const router = Router();
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const USERNAME_RE = /^[a-zA-Z0-9]{3,20}$/;
+const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 router.post('/register', async (req, res) => {
   const { email, password, username } = req.body ?? {};
@@ -51,6 +53,8 @@ router.post('/login', async (req, res) => {
 
   if (!user || !(await bcrypt.compare(password, user.password_hash)))
     return res.status(401).json({ error: 'Invalid credentials' });
+  if (user.status === 'disabled')
+    return res.status(403).json({ error: 'account disabled' });
 
   const token = jwt.sign(
     { uid: user.id, username: user.username },
@@ -58,9 +62,25 @@ router.post('/login', async (req, res) => {
     { expiresIn: '7d' }
   );
 
-  db.prepare('UPDATE users SET last_login = ? WHERE id = ?').run(Date.now(), user.id);
+  const now = Date.now();
+  const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+
+  db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(now);
+  db.prepare('DELETE FROM sessions WHERE user_id = ?').run(user.id);
+  db.prepare(
+    'INSERT INTO sessions (token_hash, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)'
+  ).run(tokenHash, user.id, now, now + SESSION_TTL_MS);
+
+  db.prepare('UPDATE users SET last_login = ? WHERE id = ?').run(now, user.id);
 
   res.json({ ok: true, token, uid: user.id, username: user.username });
+});
+
+router.post('/logout', requireAuth, (req, res) => {
+  const db = getSystemDb();
+  const tokenHash = crypto.createHash('sha256').update(req.token).digest('hex');
+  db.prepare('DELETE FROM sessions WHERE token_hash = ?').run(tokenHash);
+  res.json({ ok: true });
 });
 
 router.get('/me', requireAuth, (req, res) => {

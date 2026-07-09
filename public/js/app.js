@@ -468,7 +468,8 @@ function attachPlayerEvents() {
 }
 
 function attachProfileEvents() {
-  document.getElementById('btn-logout')?.addEventListener('click', () => {
+  document.getElementById('btn-logout')?.addEventListener('click', async () => {
+    try { await api.logout(); } catch {}
     api.clearToken();
     state.user = null;
     state.nowPlaying = null;
