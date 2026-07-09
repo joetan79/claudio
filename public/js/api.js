@@ -31,7 +31,7 @@ const api = {
         }
         if (typeof render === 'function') render();
       }
-      throw new Error(data.error || 'Request failed');
+      throw Object.assign(new Error(data.error || 'Request failed'), { status: res.status, code: data.code });
     }
     return data;
   },
@@ -68,4 +68,6 @@ const api = {
   saveRoutines(content) { return this.request('PUT', '/api/profile/routines', { content }); },
   getHistory() { return this.request('GET', '/api/profile/history'); },
   getProfile() { return this.request('GET', '/api/profile/me'); },
+  getKeys() { return this.request('GET', '/api/profile/keys'); },
+  saveKeys(payload) { return this.request('PUT', '/api/profile/keys', payload); },
 };

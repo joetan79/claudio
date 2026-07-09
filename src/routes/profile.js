@@ -4,6 +4,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { requireAuth } from '../middleware/auth.js';
 import { getSystemDb, getUserDb } from '../db/index.js';
+import { encrypt, decrypt, isEncryptionEnabled, maskKey } from '../modules/crypto.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.resolve(__dirname, '../../data');
@@ -63,6 +64,42 @@ router.get('/history', (req, res) => {
     'SELECT id, song_id, song_name, artist, played_at, source FROM plays ORDER BY played_at DESC LIMIT 20'
   ).all();
   res.json({ plays });
+});
+
+router.get('/keys', (req, res) => {
+  const db = getSystemDb();
+  const user = db.prepare('SELECT anthropic_key, fish_key FROM users WHERE id = ?').get(req.user.uid);
+  if (!user) return res.status(404).json({ error: 'User not found' });
+
+  function maskStored(ciphertext) {
+    if (!ciphertext || !isEncryptionEnabled()) return null;
+    try { return maskKey(decrypt(ciphertext)); } catch { return null; }
+  }
+
+  res.json({
+    anthropic: maskStored(user.anthropic_key),
+    fish: maskStored(user.fish_key),
+  });
+});
+
+router.put('/keys', (req, res) => {
+  if (!isEncryptionEnabled())
+    return res.status(503).json({ error: 'BYO key feature is not enabled on this server' });
+
+  const { anthropic, fish } = req.body ?? {};
+  if (anthropic === undefined && fish === undefined)
+    return res.status(400).json({ error: 'anthropic or fish required' });
+
+  const db = getSystemDb();
+  if (anthropic !== undefined) {
+    const value = anthropic === '' ? null : encrypt(anthropic);
+    db.prepare('UPDATE users SET anthropic_key = ? WHERE id = ?').run(value, req.user.uid);
+  }
+  if (fish !== undefined) {
+    const value = fish === '' ? null : encrypt(fish);
+    db.prepare('UPDATE users SET fish_key = ? WHERE id = ?').run(value, req.user.uid);
+  }
+  res.json({ ok: true });
 });
 
 router.get('/me', (req, res) => {

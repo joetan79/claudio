@@ -9,6 +9,7 @@ import profileRouter from './routes/profile.js';
 import ttsRouter from './routes/tts.js';
 import adminRouter from './routes/admin.js';
 import { startScheduler } from './modules/scheduler.js';
+import { isEncryptionEnabled } from './modules/crypto.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -51,6 +52,10 @@ app.get('*', (req, res) => {
 
 getSystemDb();
 startScheduler();
+
+if (!isEncryptionEnabled()) {
+  console.warn('[Claudio] APP_ENCRYPTION_KEY not set — BYO API key feature disabled');
+}
 
 app.listen(PORT, HOST, () => {
   console.log(`Claudio running on ${HOST}:${PORT}`);

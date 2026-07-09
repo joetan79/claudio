@@ -1,7 +1,9 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { getUserDb } from '../db/index.js';
+import { getUserDb, getSystemDb } from '../db/index.js';
+import { decrypt, isEncryptionEnabled } from './crypto.js';
+import { recordUsage } from './usage.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.resolve(__dirname, '../../../data');
@@ -41,6 +43,19 @@ function detectLang(text) {
   const chineseChars = (text.match(/[一-鿿]/g) || []).length;
   const totalChars = text.replace(/\s/g, '').length;
   return chineseChars === 0 && totalChars > 0 ? 'en' : 'zh';
+}
+
+function getUserAnthropicKey(uid) {
+  if (!isEncryptionEnabled()) return null;
+  const db = getSystemDb();
+  const row = db.prepare('SELECT anthropic_key FROM users WHERE id = ?').get(uid);
+  if (!row?.anthropic_key) return null;
+  try {
+    return decrypt(row.anthropic_key);
+  } catch {
+    console.warn('[claude] failed to decrypt stored user key');
+    return null;
+  }
 }
 
 export async function djDecision(uid, userMessage, context) {
@@ -153,11 +168,16 @@ Example 5 — 用户疲惫，中文（慢下来，句子有呼吸感）:
     ? 'CRITICAL OVERRIDE: The listener wrote in English only. Your "say" field MUST be written entirely in English. Do not use any Chinese characters in "say".'
     : 'The listener wrote in Chinese. Your "say" field must be in Chinese.';
 
+  const model = process.env.CLAUDE_MODEL || 'claude-haiku-4-5';
   const body = JSON.stringify({
-    model: process.env.CLAUDE_MODEL || 'claude-haiku-4-5',
+    model,
     max_tokens: 1024,
     messages: [{ role: 'user', content: langInstruction + '\n\n' + prompt }],
   });
+
+  const userKey = getUserAnthropicKey(uid);
+  const apiKey = userKey || process.env.ANTHROPIC_API_KEY;
+  const ownKey = !!userKey;
 
   let response;
   const retryDelays = [3000, 8000, 15000];
@@ -170,7 +190,7 @@ Example 5 — 用户疲惫，中文（慢下来，句子有呼吸感）:
     response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
-        'x-api-key': process.env.ANTHROPIC_API_KEY,
+        'x-api-key': apiKey,
         'anthropic-version': '2023-06-01',
         'content-type': 'application/json',
       },
@@ -182,10 +202,26 @@ Example 5 — 用户疲惫，中文（慢下来，句子有呼吸感）:
   if (!response.ok) {
     const err = await response.text();
     console.error('Anthropic API error:', response.status, err);
+    if (ownKey && (response.status === 401 || response.status === 403)) {
+      throw Object.assign(new Error('Your API Key is invalid. Please check your key in Profile > API Keys.'), {
+        code: 'OWN_KEY_INVALID',
+        status: response.status,
+      });
+    }
     return FALLBACK;
   }
 
   const data = await response.json();
+  if (data.usage) {
+    recordUsage({
+      uid,
+      type: 'claude',
+      model,
+      inputTokens: data.usage.input_tokens,
+      outputTokens: data.usage.output_tokens,
+      ownKey,
+    });
+  }
   const text = data.content?.[0]?.text ?? '';
 
   try {

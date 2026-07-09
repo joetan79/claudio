@@ -25,7 +25,7 @@ async function generateDailyPlan(timeLabel, message, timeOfDay) {
         'INSERT OR REPLACE INTO memory (key, value, updated_at) VALUES (?, ?, ?)'
       ).run(`plan_${timeLabel}`, JSON.stringify(decision), Date.now());
 
-      if (decision.say) await synthesize(decision.say);
+      if (decision.say) await synthesize(decision.say, { uid: user.id });
 
       console.log(`[Scheduler] Done for ${user.username}`);
     } catch (e) {

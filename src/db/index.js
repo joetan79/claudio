@@ -34,6 +34,20 @@ export function getSystemDb() {
       created_at   INTEGER NOT NULL,
       expires_at   INTEGER NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS usage (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      uid           TEXT NOT NULL,
+      type          TEXT NOT NULL,
+      model         TEXT,
+      input_tokens  INTEGER DEFAULT 0,
+      output_tokens INTEGER DEFAULT 0,
+      chars         INTEGER DEFAULT 0,
+      own_key       INTEGER DEFAULT 0,
+      ts            INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_usage_uid_ts ON usage(uid, ts);
   `);
 
   // Add role column to existing DBs (no-op on new ones)
@@ -41,6 +55,10 @@ export function getSystemDb() {
 
   // Add status column to existing DBs (no-op on new ones)
   try { systemDb.exec(`ALTER TABLE users ADD COLUMN status TEXT NOT NULL DEFAULT 'active'`); } catch {}
+
+  // Add BYO API key columns to existing DBs (no-op on new ones)
+  try { systemDb.exec(`ALTER TABLE users ADD COLUMN anthropic_key TEXT`); } catch {}
+  try { systemDb.exec(`ALTER TABLE users ADD COLUMN fish_key TEXT`); } catch {}
 
   // Auto-create admin account on first start
   const adminExists = systemDb.prepare(`SELECT id FROM users WHERE role = 'admin'`).get();

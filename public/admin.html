@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Claudio Admin</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     :root {
@@ -84,6 +85,23 @@
     .btn-role { border-color: var(--accent); color: var(--accent); background: transparent; }
     .btn-delete { border-color: var(--danger); color: var(--danger); background: transparent; }
 
+    /* Usage */
+    .usage-section { margin-top: 32px; }
+    .usage-header { display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 14px; }
+    .usage-title { font-size: 0.85rem; font-weight: 600; color: var(--muted);
+      text-transform: uppercase; letter-spacing: 0.07em; }
+    .range-toggle { display: flex; gap: 6px; }
+    .range-btn { padding: 5px 14px; border-radius: 6px; font-size: 0.8rem;
+      border: 1px solid var(--border); background: transparent; color: var(--muted);
+      cursor: pointer; transition: all 0.15s; }
+    .range-btn:hover { border-color: var(--accent); color: var(--accent); }
+    .range-btn.active { background: var(--accent-dim); border-color: var(--accent); color: var(--accent); }
+    .chart-wrap { background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 18px; margin-bottom: 16px; height: 300px; }
+    .badge-ownkey { background: var(--accent-dim); color: var(--accent); }
+    .badge-defaultkey { background: rgba(136,136,136,0.15); color: var(--muted); }
+
     /* Misc */
     .btn-logout { background: none; border: 1px solid var(--border); color: var(--muted);
       font-size: 0.8rem; padding: 6px 14px; border-radius: 5px; cursor: pointer;
@@ -105,6 +123,11 @@
   let token = sessionStorage.getItem(TOKEN_KEY);
   let currentUser = null;
   let usersData = null;
+  let usageDays = 30;
+  let usageSummary = null;
+  let usageDaily = null;
+  let chartUsers = null;
+  let chartDaily = null;
 
   function fmtDate(ts) {
     if (!ts) return '—';
@@ -231,6 +254,7 @@
   <td>${fmtDate(u.created_at)}</td>
   <td>${fmtDate(u.last_login)}</td>
   <td><span class="badge badge-${u.status === 'disabled' ? 'disabled' : 'active'}">${u.status}</span></td>
+  <td><span class="badge ${u.has_own_key ? 'badge-ownkey' : 'badge-defaultkey'}">${u.has_own_key ? 'Yes' : 'No'}</span></td>
   <td>
     <button class="btn-action btn-reset" onclick="resetPassword('${u.id}','${u.username.replace(/'/g,"\\'")}')">Reset PW</button>
     ${u.id !== currentUser?.uid ? `<button class="btn-action btn-status" onclick="toggleStatus('${u.id}','${u.status}')">${u.status === 'disabled' ? 'Enable' : 'Disable'}</button>` : ''}
@@ -267,12 +291,143 @@
   <table>
     <thead><tr>
       <th>Username</th><th>Email</th><th>Role</th>
-      <th>Registered</th><th>Last Login</th><th>Status</th><th>Actions</th>
+      <th>Registered</th><th>Last Login</th><th>Status</th><th>Own Key</th><th>Actions</th>
     </tr></thead>
     <tbody>${rows}</tbody>
   </table>`}
+</div>
+<div class="usage-section">
+  <div class="usage-header">
+    <span class="usage-title">Usage</span>
+    <div class="range-toggle">
+      <button class="range-btn ${usageDays === 7 ? 'active' : ''}" data-days="7">7d</button>
+      <button class="range-btn ${usageDays === 30 ? 'active' : ''}" data-days="30">30d</button>
+      <button class="range-btn ${usageDays === 90 ? 'active' : ''}" data-days="90">90d</button>
+    </div>
+  </div>
+  <div class="chart-wrap"><canvas id="chart-users"></canvas></div>
+  <div class="chart-wrap"><canvas id="chart-daily"></canvas></div>
+  <div class="table-wrap">
+    <div class="table-title">Usage Detail</div>
+    <table>
+      <thead><tr>
+        <th>User</th><th>Claude Input</th><th>Claude Output</th><th>TTS Chars</th><th>Key</th><th>Calls</th>
+      </tr></thead>
+      <tbody id="usage-table-body">
+        <tr><td colspan="6" class="empty-msg">Loading...</td></tr>
+      </tbody>
+    </table>
+  </div>
 </div>`;
     document.getElementById('adm-logout').addEventListener('click', doLogout);
+    document.querySelectorAll('.range-btn').forEach(btn => {
+      btn.addEventListener('click', () => setUsageDays(Number(btn.dataset.days)));
+    });
+    loadUsage();
+  }
+
+  async function loadUsage() {
+    try {
+      const [summary, daily] = await Promise.all([
+        apiFetch('GET', `/api/admin/usage/summary?days=${usageDays}`),
+        apiFetch('GET', `/api/admin/usage/daily?days=${usageDays}`),
+      ]);
+      usageSummary = summary;
+      usageDaily = daily;
+      renderUsageTable();
+      renderCharts();
+    } catch (e) {
+      console.error('Failed to load usage:', e.message);
+    }
+  }
+
+  function setUsageDays(days) {
+    usageDays = days;
+    document.querySelectorAll('.range-btn').forEach(b => {
+      b.classList.toggle('active', Number(b.dataset.days) === days);
+    });
+    loadUsage();
+  }
+
+  function renderUsageTable() {
+    const tbody = document.getElementById('usage-table-body');
+    if (!tbody || !usageSummary) return;
+    const rows = usageSummary.users
+      .filter(u => u.total_calls > 0)
+      .sort((a, b) => (b.claude_input + b.claude_output) - (a.claude_input + a.claude_output));
+    tbody.innerHTML = rows.length ? rows.map(u => `
+<tr>
+  <td>${u.username}</td>
+  <td>${(u.claude_input || 0).toLocaleString()}</td>
+  <td>${(u.claude_output || 0).toLocaleString()}</td>
+  <td>${(u.tts_chars || 0).toLocaleString()}</td>
+  <td><span class="badge ${u.own_key_calls > 0 ? 'badge-ownkey' : 'badge-defaultkey'}">${u.own_key_calls > 0 ? 'Own' : 'Default'}</span></td>
+  <td>${u.total_calls}</td>
+</tr>`).join('') : '<tr><td colspan="6" class="empty-msg">No usage data.</td></tr>';
+  }
+
+  function renderCharts() {
+    if (typeof Chart === 'undefined') return;
+    const userRows = (usageSummary?.users || [])
+      .filter(u => (u.claude_input + u.claude_output) > 0)
+      .sort((a, b) => (b.claude_input + b.claude_output) - (a.claude_input + a.claude_output))
+      .slice(0, 20);
+
+    const ctxUsers = document.getElementById('chart-users');
+    if (chartUsers) { chartUsers.destroy(); chartUsers = null; }
+    if (ctxUsers) {
+      chartUsers = new Chart(ctxUsers, {
+        type: 'bar',
+        data: {
+          labels: userRows.map(u => u.username),
+          datasets: [
+            { label: 'Input tokens', data: userRows.map(u => u.claude_input), backgroundColor: '#c8a96e' },
+            { label: 'Output tokens', data: userRows.map(u => u.claude_output), backgroundColor: '#7a684a' },
+          ],
+        },
+        options: {
+          indexAxis: 'y',
+          responsive: true,
+          maintainAspectRatio: false,
+          scales: {
+            x: { stacked: true, ticks: { color: '#888' }, grid: { color: '#2a2a2a' } },
+            y: { stacked: true, ticks: { color: '#ccc' }, grid: { color: '#2a2a2a' } },
+          },
+          plugins: {
+            legend: { labels: { color: '#ccc' } },
+            title: { display: true, text: `Claude Tokens by User (last ${usageDays}d)`, color: '#ccc' },
+          },
+        },
+      });
+    }
+
+    const dailyRows = usageDaily?.daily || [];
+    const ctxDaily = document.getElementById('chart-daily');
+    if (chartDaily) { chartDaily.destroy(); chartDaily = null; }
+    if (ctxDaily) {
+      chartDaily = new Chart(ctxDaily, {
+        type: 'line',
+        data: {
+          labels: dailyRows.map(d => d.date),
+          datasets: [
+            { label: 'Claude tokens/day', data: dailyRows.map(d => d.claude_tokens),
+              borderColor: '#c8a96e', backgroundColor: 'rgba(200,169,110,0.15)', tension: 0.3, fill: true },
+          ],
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          scales: {
+            x: { ticks: { color: '#888' }, grid: { color: '#2a2a2a' } },
+            y: { ticks: { color: '#888' }, grid: { color: '#2a2a2a' } },
+          },
+          plugins: {
+            legend: { labels: { color: '#ccc' } },
+            title: { display: true, text: `Site-wide Daily Token Trend (last ${usageDays}d)`, color: '#ccc' },
+          },
+        },
+      });
+    }
   }
 
   async function render() {

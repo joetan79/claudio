@@ -45,10 +45,11 @@ const state = {
   user: null,
   view: 'auth',       // 'auth' | 'player' | 'profile'
   authTab: 'login',   // 'login' | 'register'
-  profileTab: 'taste', // 'taste' | 'routines' | 'history'
+  profileTab: 'taste', // 'taste' | 'routines' | 'history' | 'keys'
   nowPlaying: null,
   loading: false,
-  profileData: { taste: '', routines: '', history: [] },
+  error: null,
+  profileData: { taste: '', routines: '', history: [], keys: { anthropic: null, fish: null } },
 };
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -209,6 +210,7 @@ function renderPlayerContent() {
     ${state.loading ? esc(i18n.t('loading')) : esc(i18n.t('send'))}
   </button>
 </div>
+${state.error ? `<div class="dj-error">${esc(state.error)}</div>` : ''}
 ${state.loading ? `<div class="loading-text">${esc(i18n.t('loading'))}</div>` : djBlock}`;
 }
 
@@ -268,6 +270,7 @@ function renderProfileContent() {
   <button class="profile-tab ${state.profileTab === 'taste' ? 'active' : ''}" data-tab="taste">${esc(i18n.t('taste'))}</button>
   <button class="profile-tab ${state.profileTab === 'routines' ? 'active' : ''}" data-tab="routines">${esc(i18n.t('routines'))}</button>
   <button class="profile-tab ${state.profileTab === 'history' ? 'active' : ''}" data-tab="history">${esc(i18n.t('history'))}</button>
+  <button class="profile-tab ${state.profileTab === 'keys' ? 'active' : ''}" data-tab="keys">${esc(i18n.t('apiKeys'))}</button>
 </div>
 ${renderProfileTab()}`;
 }
@@ -294,6 +297,36 @@ function renderProfileTab() {
   <div>
     <button class="btn-save" id="btn-save-routines">${esc(i18n.t('save'))}</button>
     <span class="save-confirm" id="routines-confirm" style="display:none">${esc(i18n.t('saved'))}</span>
+  </div>
+</div>`;
+  }
+  if (state.profileTab === 'keys') {
+    const k = state.profileData.keys || {};
+    return `
+<div>
+  <div class="section-title">${esc(i18n.t('apiKeys'))}</div>
+  <div class="section-desc">${esc(i18n.t('apiKeysDesc'))}</div>
+
+  <div class="form-group">
+    <label>${esc(i18n.t('anthropicKey'))}</label>
+    <div class="key-current">${esc(i18n.t('keyCurrentLabel'))} ${k.anthropic ? esc(k.anthropic) : esc(i18n.t('keyNotSet'))}</div>
+    <input type="text" id="anthropic-key-input" placeholder="sk-ant-..." autocomplete="off" spellcheck="false" />
+  </div>
+  <div class="key-row">
+    <button class="btn-save" id="btn-save-anthropic-key">${esc(i18n.t('save'))}</button>
+    <button class="btn-clear" id="btn-clear-anthropic-key">${esc(i18n.t('clearKey'))}</button>
+    <span class="save-confirm" id="anthropic-key-confirm" style="display:none"></span>
+  </div>
+
+  <div class="form-group" style="margin-top:24px">
+    <label>${esc(i18n.t('fishKey'))}</label>
+    <div class="key-current">${esc(i18n.t('keyCurrentLabel'))} ${k.fish ? esc(k.fish) : esc(i18n.t('keyNotSet'))}</div>
+    <input type="text" id="fish-key-input" placeholder="" autocomplete="off" spellcheck="false" />
+  </div>
+  <div class="key-row">
+    <button class="btn-save" id="btn-save-fish-key">${esc(i18n.t('save'))}</button>
+    <button class="btn-clear" id="btn-clear-fish-key">${esc(i18n.t('clearKey'))}</button>
+    <span class="save-confirm" id="fish-key-confirm" style="display:none"></span>
   </div>
 </div>`;
   }
@@ -440,6 +473,7 @@ function attachPlayerEvents() {
     }
 
     state.loading = true;
+    state.error = null;
     fillPlayer();
     attachPlayerEvents();
     try {
@@ -451,6 +485,7 @@ function attachPlayerEvents() {
       if (input) input.value = '';
     } catch (err) {
       console.error(err);
+      state.error = err.code === 'OWN_KEY_INVALID' ? i18n.t('ownKeyInvalid') : (err.message || i18n.t('errorServer'));
     } finally {
       state.loading = false;
       resetPlayerState();
@@ -482,6 +517,7 @@ function attachProfileEvents() {
     tab.addEventListener('click', async () => {
       state.profileTab = tab.dataset.tab;
       if (state.profileTab === 'history') await loadHistory();
+      if (state.profileTab === 'keys') await loadKeys();
       fillProfile();
       attachProfileEvents();
     });
@@ -518,6 +554,51 @@ function attachProfileEvents() {
       console.error(err);
     } finally {
       btn.disabled = false;
+    }
+  });
+
+  wireKeyButtons('anthropic');
+  wireKeyButtons('fish');
+}
+
+function wireKeyButtons(kind) {
+  const saveBtn = document.getElementById(`btn-save-${kind}-key`);
+  const clearBtn = document.getElementById(`btn-clear-${kind}-key`);
+  const input = document.getElementById(`${kind}-key-input`);
+
+  saveBtn?.addEventListener('click', async () => {
+    const value = input?.value.trim() || '';
+    if (!value) return;
+    saveBtn.disabled = true;
+    try {
+      await api.saveKeys({ [kind]: value });
+      await loadKeys();
+      fillProfile();
+      attachProfileEvents();
+      const newConfirm = document.getElementById(`${kind}-key-confirm`);
+      if (newConfirm) {
+        newConfirm.textContent = i18n.t('keySaved');
+        newConfirm.style.display = 'inline-block';
+        setTimeout(() => { newConfirm.style.display = 'none'; }, 2000);
+      }
+    } catch (err) {
+      alert(err.message || i18n.t('errorServer'));
+    } finally {
+      saveBtn.disabled = false;
+    }
+  });
+
+  clearBtn?.addEventListener('click', async () => {
+    clearBtn.disabled = true;
+    try {
+      await api.saveKeys({ [kind]: '' });
+      await loadKeys();
+      fillProfile();
+      attachProfileEvents();
+    } catch (err) {
+      alert(err.message || i18n.t('errorServer'));
+    } finally {
+      clearBtn.disabled = false;
     }
   });
 }
@@ -582,6 +663,15 @@ async function loadHistory() {
   try {
     const data = await api.getHistory();
     state.profileData.history = data.plays || [];
+  } catch (err) {
+    console.error(err);
+  }
+}
+
+async function loadKeys() {
+  try {
+    const data = await api.getKeys();
+    state.profileData.keys = { anthropic: data.anthropic || null, fish: data.fish || null };
   } catch (err) {
     console.error(err);
   }

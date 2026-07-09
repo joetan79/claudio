@@ -11,11 +11,18 @@ const THIRTY_DAYS = 30 * 24 * 60 * 60 * 1000;
 router.get('/users', (req, res) => {
   const db = getSystemDb();
   const users = db.prepare(
-    'SELECT id, username, email, role, status, created_at, last_login FROM users ORDER BY created_at DESC'
+    'SELECT id, username, email, role, status, created_at, last_login, anthropic_key, fish_key FROM users ORDER BY created_at DESC'
   ).all();
   const now = Date.now();
   const withActivity = users.map(u => ({
-    ...u,
+    id: u.id,
+    username: u.username,
+    email: u.email,
+    role: u.role,
+    status: u.status,
+    created_at: u.created_at,
+    last_login: u.last_login,
+    has_own_key: !!(u.anthropic_key || u.fish_key),
     activity: u.last_login && (now - u.last_login) < THIRTY_DAYS ? 'active' : 'inactive',
   }));
   res.json({
@@ -24,6 +31,44 @@ router.get('/users', (req, res) => {
     inactive: withActivity.filter(u => u.activity === 'inactive').length,
     users: withActivity,
   });
+});
+
+router.get('/usage/summary', (req, res) => {
+  const days = Math.max(1, Math.min(365, parseInt(req.query.days, 10) || 30));
+  const since = Date.now() - days * 24 * 60 * 60 * 1000;
+  const db = getSystemDb();
+  const rows = db.prepare(`
+    SELECT
+      u.id AS uid,
+      u.username AS username,
+      COALESCE(SUM(CASE WHEN us.type = 'claude' THEN us.input_tokens ELSE 0 END), 0) AS claude_input,
+      COALESCE(SUM(CASE WHEN us.type = 'claude' THEN us.output_tokens ELSE 0 END), 0) AS claude_output,
+      COALESCE(SUM(CASE WHEN us.type = 'tts' THEN us.chars ELSE 0 END), 0) AS tts_chars,
+      COALESCE(SUM(CASE WHEN us.own_key = 1 THEN 1 ELSE 0 END), 0) AS own_key_calls,
+      COUNT(us.id) AS total_calls
+    FROM users u
+    LEFT JOIN usage us ON us.uid = u.id AND us.ts >= ?
+    GROUP BY u.id
+    ORDER BY (claude_input + claude_output) DESC
+  `).all(since);
+  res.json({ days, users: rows });
+});
+
+router.get('/usage/daily', (req, res) => {
+  const days = Math.max(1, Math.min(365, parseInt(req.query.days, 10) || 30));
+  const since = Date.now() - days * 24 * 60 * 60 * 1000;
+  const db = getSystemDb();
+  const rows = db.prepare(`
+    SELECT
+      date(ts / 1000, 'unixepoch', 'localtime') AS date,
+      COALESCE(SUM(CASE WHEN type = 'claude' THEN input_tokens + output_tokens ELSE 0 END), 0) AS claude_tokens,
+      COALESCE(SUM(CASE WHEN type = 'tts' THEN chars ELSE 0 END), 0) AS tts_chars
+    FROM usage
+    WHERE ts >= ?
+    GROUP BY date
+    ORDER BY date ASC
+  `).all(since);
+  res.json({ days, daily: rows });
 });
 
 router.post('/users/:uid/reset-password', (req, res) => {

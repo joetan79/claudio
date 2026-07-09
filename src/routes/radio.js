@@ -37,22 +37,37 @@ router.post('/decide', async (req, res) => {
     currentMood: mood ?? '',
   };
 
-  const decision = await djDecision(uid, message, context);
+  let decision;
+  try {
+    decision = await djDecision(uid, message, context);
+  } catch (e) {
+    if (e.code === 'OWN_KEY_INVALID') return res.status(e.status || 401).json({ error: e.message, code: 'OWN_KEY_INVALID' });
+    throw e;
+  }
 
   // TTS runs in parallel with song resolution.
   // Per song: NCM first → use normalized name+artist as YouTube query for accuracy.
-  const [audioUrl, playWithUrls] = await Promise.all([
-    synthesize(decision.say).catch(() => null),
-    Promise.all(
-      (decision.play || []).map(async (song) => {
-        const ncm = await resolveSong(song.query).catch(() => null);
-        const ytQuery = ncm ? `${ncm.name} ${ncm.artist}` : song.query;
-        const yt = await searchYouTube(ytQuery).catch(() => null);
-        const query = ncm ? `${ncm.name} - ${ncm.artist}` : song.query;
-        return { ...song, query, ncm, yt };
-      })
-    ),
-  ]);
+  let audioUrl, playWithUrls;
+  try {
+    [audioUrl, playWithUrls] = await Promise.all([
+      synthesize(decision.say, { uid }).catch(e => {
+        if (e.code === 'OWN_KEY_INVALID') throw e;
+        return null;
+      }),
+      Promise.all(
+        (decision.play || []).map(async (song) => {
+          const ncm = await resolveSong(song.query).catch(() => null);
+          const ytQuery = ncm ? `${ncm.name} ${ncm.artist}` : song.query;
+          const yt = await searchYouTube(ytQuery).catch(() => null);
+          const query = ncm ? `${ncm.name} - ${ncm.artist}` : song.query;
+          return { ...song, query, ncm, yt };
+        })
+      ),
+    ]);
+  } catch (e) {
+    if (e.code === 'OWN_KEY_INVALID') return res.status(e.status || 401).json({ error: e.message, code: 'OWN_KEY_INVALID' });
+    throw e;
+  }
 
   // Retry YouTube for songs missing videoId using artist/mood alternative queries
   const play = await Promise.all(
@@ -139,8 +154,17 @@ router.post('/plan/generate', async (req, res) => {
   const planKey = isNight ? 'plan_night' : 'plan_morning';
 
   const context = { weather: '', timeOfDay, recentPlays: [], currentMood: '' };
-  const decision = await djDecision(uid, message, context);
-  const audioUrl = await synthesize(decision.say).catch(() => null);
+  let decision, audioUrl;
+  try {
+    decision = await djDecision(uid, message, context);
+    audioUrl = await synthesize(decision.say, { uid }).catch(e => {
+      if (e.code === 'OWN_KEY_INVALID') throw e;
+      return null;
+    });
+  } catch (e) {
+    if (e.code === 'OWN_KEY_INVALID') return res.status(e.status || 401).json({ error: e.message, code: 'OWN_KEY_INVALID' });
+    throw e;
+  }
   const result = { ...decision, audioUrl: audioUrl ?? null };
 
   const db = getUserDb(uid);
