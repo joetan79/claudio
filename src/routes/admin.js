@@ -37,18 +37,22 @@ router.get('/usage/summary', (req, res) => {
   const days = Math.max(1, Math.min(365, parseInt(req.query.days, 10) || 30));
   const since = Date.now() - days * 24 * 60 * 60 * 1000;
   const db = getSystemDb();
+  // Driven by `usage`, not `users` — a user LEFT JOIN would silently drop usage
+  // rows belonging to since-deleted accounts, while /usage/daily (which reads
+  // `usage` directly) would still count them, making the two charts disagree.
   const rows = db.prepare(`
     SELECT
-      u.id AS uid,
-      u.username AS username,
-      COALESCE(SUM(CASE WHEN us.type = 'claude' THEN us.input_tokens ELSE 0 END), 0) AS claude_input,
-      COALESCE(SUM(CASE WHEN us.type = 'claude' THEN us.output_tokens ELSE 0 END), 0) AS claude_output,
-      COALESCE(SUM(CASE WHEN us.type = 'tts' THEN us.chars ELSE 0 END), 0) AS tts_chars,
-      COALESCE(SUM(CASE WHEN us.own_key = 1 THEN 1 ELSE 0 END), 0) AS own_key_calls,
-      COUNT(us.id) AS total_calls
-    FROM users u
-    LEFT JOIN usage us ON us.uid = u.id AND us.ts >= ?
-    GROUP BY u.id
+      us.uid AS uid,
+      COALESCE(u.username, '(deleted user)') AS username,
+      SUM(CASE WHEN us.type = 'claude' THEN us.input_tokens ELSE 0 END) AS claude_input,
+      SUM(CASE WHEN us.type = 'claude' THEN us.output_tokens ELSE 0 END) AS claude_output,
+      SUM(CASE WHEN us.type = 'tts' THEN us.chars ELSE 0 END) AS tts_chars,
+      SUM(CASE WHEN us.own_key = 1 THEN 1 ELSE 0 END) AS own_key_calls,
+      COUNT(*) AS total_calls
+    FROM usage us
+    LEFT JOIN users u ON u.id = us.uid
+    WHERE us.ts >= ?
+    GROUP BY us.uid
     ORDER BY (claude_input + claude_output) DESC
   `).all(since);
   res.json({ days, users: rows });
