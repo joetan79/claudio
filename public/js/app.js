@@ -51,7 +51,7 @@ const state = {
   error: null,
   profileData: {
     taste: '', routines: '', history: [],
-    keys: { anthropic: null, fish: null },
+    keys: { key: null, provider: 'anthropic', model: '' },
     voices: { voices: [], current: null },
   },
 };
@@ -227,12 +227,11 @@ ${state.loading ? `<div class="loading-text">${esc(i18n.t('loading'))}</div>` : 
 }
 
 function renderSong(s, idx) {
-  const name = s.ncm?.name ? esc(s.ncm.name) : esc(s.song || s.query || '');
-  const artist = s.ncm?.artist ? esc(s.ncm.artist) : esc(s.artist || '');
+  const rawName = s.song_name || s.ncm?.name || s.song || s.query || '';
+  const rawArtist = s.artist || s.ncm?.artist || '';
+  const name = esc(rawName);
+  const artist = esc(rawArtist);
   const displayName = artist ? `${name} · ${artist}` : name;
-  const rawName = s.ncm?.name || s.song || s.query || '';
-  const rawArtist = s.ncm?.artist || s.artist || '';
-  const rawQuery = rawArtist ? `${rawName} - ${rawArtist}` : rawName;
 
   mlog('song', idx, 'videoId:', s.yt?.videoId);
   let playerHtml;
@@ -258,7 +257,7 @@ function renderSong(s, idx) {
       <div class="song-query">${displayName}</div>
       ${s.reason ? `<div class="song-reason"><span>${esc(i18n.t('whyThis'))}</span> ${esc(s.reason)}</div>` : ''}
     </div>
-    <button class="btn-played" id="played-btn-${idx}" data-query="${esc(rawQuery)}"
+    <button class="btn-played" id="played-btn-${idx}" data-name="${esc(rawName)}" data-artist="${esc(rawArtist)}"
       onclick="event.stopPropagation();markPlayed(this)">${esc(i18n.t('markPlayed'))}</button>
   </div>
   ${playerHtml}
@@ -315,31 +314,33 @@ function renderProfileTab() {
   }
   if (state.profileTab === 'keys') {
     const k = state.profileData.keys || {};
+    const provider = k.provider || 'anthropic';
     return `
 <div>
   <div class="section-title">${esc(i18n.t('apiKeys'))}</div>
   <div class="section-desc">${esc(i18n.t('apiKeysDesc'))}</div>
 
   <div class="form-group">
-    <label>${esc(i18n.t('anthropicKey'))}</label>
-    <div class="key-current">${esc(i18n.t('keyCurrentLabel'))} ${k.anthropic ? esc(k.anthropic) : esc(i18n.t('keyNotSet'))}</div>
-    <input type="text" id="anthropic-key-input" placeholder="sk-ant-..." autocomplete="off" spellcheck="false" />
+    <label>${esc(i18n.t('aiProvider'))}</label>
+    <select id="ai-provider-select">
+      <option value="anthropic" ${provider === 'anthropic' ? 'selected' : ''}>Anthropic</option>
+      <option value="openrouter" ${provider === 'openrouter' ? 'selected' : ''}>OpenRouter</option>
+    </select>
+  </div>
+  <div class="form-group">
+    <label>${esc(i18n.t('aiKey'))}</label>
+    <div class="key-current">${esc(i18n.t('keyCurrentLabel'))} ${k.key ? esc(k.key) : esc(i18n.t('keyNotSet'))}</div>
+    <input type="text" id="ai-key-input" placeholder="sk-..." autocomplete="off" spellcheck="false" />
+  </div>
+  <div class="form-group">
+    <label>${esc(i18n.t('aiModel'))}</label>
+    <input type="text" id="ai-model-input" placeholder="${esc(i18n.t('aiModelPlaceholder'))}"
+      value="${esc(k.model || '')}" autocomplete="off" spellcheck="false" />
   </div>
   <div class="key-row">
-    <button class="btn-save" id="btn-save-anthropic-key">${esc(i18n.t('save'))}</button>
-    <button class="btn-clear" id="btn-clear-anthropic-key">${esc(i18n.t('clearKey'))}</button>
-    <span class="save-confirm" id="anthropic-key-confirm" style="display:none"></span>
-  </div>
-
-  <div class="form-group" style="margin-top:24px">
-    <label>${esc(i18n.t('fishKey'))}</label>
-    <div class="key-current">${esc(i18n.t('keyCurrentLabel'))} ${k.fish ? esc(k.fish) : esc(i18n.t('keyNotSet'))}</div>
-    <input type="text" id="fish-key-input" placeholder="" autocomplete="off" spellcheck="false" />
-  </div>
-  <div class="key-row">
-    <button class="btn-save" id="btn-save-fish-key">${esc(i18n.t('save'))}</button>
-    <button class="btn-clear" id="btn-clear-fish-key">${esc(i18n.t('clearKey'))}</button>
-    <span class="save-confirm" id="fish-key-confirm" style="display:none"></span>
+    <button class="btn-save" id="btn-save-ai-key">${esc(i18n.t('save'))}</button>
+    <button class="btn-clear" id="btn-clear-ai-key">${esc(i18n.t('clearKey'))}</button>
+    <span class="save-confirm" id="ai-key-confirm" style="display:none"></span>
   </div>
 </div>`;
   }
@@ -522,7 +523,9 @@ function attachPlayerEvents() {
       if (input) input.value = '';
     } catch (err) {
       console.error(err);
-      state.error = err.code === 'OWN_KEY_INVALID' ? i18n.t('ownKeyInvalid') : (err.message || i18n.t('errorServer'));
+      if (err.code === 'OWN_KEY_INVALID') state.error = i18n.t('ownKeyInvalid');
+      else if (err.code === 'AI_KEY_REQUIRED') state.error = i18n.t('aiKeyRequired');
+      else state.error = err.message || i18n.t('errorServer');
     } finally {
       state.loading = false;
       resetPlayerState();
@@ -595,8 +598,46 @@ function attachProfileEvents() {
     }
   });
 
-  wireKeyButtons('anthropic');
-  wireKeyButtons('fish');
+  document.getElementById('btn-save-ai-key')?.addEventListener('click', async () => {
+    const key = document.getElementById('ai-key-input')?.value.trim() || '';
+    const provider = document.getElementById('ai-provider-select')?.value || 'anthropic';
+    const model = document.getElementById('ai-model-input')?.value.trim() || '';
+    const btn = document.getElementById('btn-save-ai-key');
+    btn.disabled = true;
+    try {
+      const payload = { provider, model };
+      if (key) payload.key = key;
+      await api.saveKeys(payload);
+      await loadKeys();
+      fillProfile();
+      attachProfileEvents();
+      const confirm = document.getElementById('ai-key-confirm');
+      if (confirm) {
+        confirm.textContent = i18n.t('keySaved');
+        confirm.style.display = 'inline-block';
+        setTimeout(() => { confirm.style.display = 'none'; }, 2000);
+      }
+    } catch (err) {
+      alert(err.message || i18n.t('errorServer'));
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  document.getElementById('btn-clear-ai-key')?.addEventListener('click', async () => {
+    const btn = document.getElementById('btn-clear-ai-key');
+    btn.disabled = true;
+    try {
+      await api.saveKeys({ key: '' });
+      await loadKeys();
+      fillProfile();
+      attachProfileEvents();
+    } catch (err) {
+      alert(err.message || i18n.t('errorServer'));
+    } finally {
+      btn.disabled = false;
+    }
+  });
 
   document.querySelectorAll('input[name="dj-voice"]').forEach(radio => {
     radio.addEventListener('change', async () => {
@@ -631,48 +672,6 @@ function attachProfileEvents() {
         btn.textContent = original;
       }
     });
-  });
-}
-
-function wireKeyButtons(kind) {
-  const saveBtn = document.getElementById(`btn-save-${kind}-key`);
-  const clearBtn = document.getElementById(`btn-clear-${kind}-key`);
-  const input = document.getElementById(`${kind}-key-input`);
-
-  saveBtn?.addEventListener('click', async () => {
-    const value = input?.value.trim() || '';
-    if (!value) return;
-    saveBtn.disabled = true;
-    try {
-      await api.saveKeys({ [kind]: value });
-      await loadKeys();
-      fillProfile();
-      attachProfileEvents();
-      const newConfirm = document.getElementById(`${kind}-key-confirm`);
-      if (newConfirm) {
-        newConfirm.textContent = i18n.t('keySaved');
-        newConfirm.style.display = 'inline-block';
-        setTimeout(() => { newConfirm.style.display = 'none'; }, 2000);
-      }
-    } catch (err) {
-      alert(err.message || i18n.t('errorServer'));
-    } finally {
-      saveBtn.disabled = false;
-    }
-  });
-
-  clearBtn?.addEventListener('click', async () => {
-    clearBtn.disabled = true;
-    try {
-      await api.saveKeys({ [kind]: '' });
-      await loadKeys();
-      fillProfile();
-      attachProfileEvents();
-    } catch (err) {
-      alert(err.message || i18n.t('errorServer'));
-    } finally {
-      clearBtn.disabled = false;
-    }
   });
 }
 
@@ -744,7 +743,7 @@ async function loadHistory() {
 async function loadKeys() {
   try {
     const data = await api.getKeys();
-    state.profileData.keys = { anthropic: data.anthropic || null, fish: data.fish || null };
+    state.profileData.keys = { key: data.key || null, provider: data.provider || 'anthropic', model: data.model || '' };
   } catch (err) {
     console.error(err);
   }
@@ -969,8 +968,8 @@ function createYTPlayer(index, videoId, songName, artist, retryCount = 0) {
         e.target.playVideo();
         const song = window._currentSongs?.[index];
         updateMediaSession(
-          song?.ncm?.name || song?.song || song?.query || '',
-          song?.ncm?.artist || song?.artist || ''
+          song?.song_name || song?.ncm?.name || song?.song || song?.query || '',
+          song?.artist || song?.ncm?.artist || ''
         );
       },
       onError: function(e) {
@@ -1078,8 +1077,8 @@ window.toggleYT = function(index, videoId) {
   if (indicator) indicator.style.display = 'none';
   window._ytPlayerReady = false;
   const _song = window._currentSongs?.[index];
-  const _songName = _song?.ncm?.name || _song?.song || _song?.query || '';
-  const _artist = _song?.ncm?.artist || _song?.artist || '';
+  const _songName = _song?.song_name || _song?.ncm?.name || _song?.song || _song?.query || '';
+  const _artist = _song?.artist || _song?.ncm?.artist || '';
   createYTPlayer(index, videoId, _songName, _artist);
   if (isIOS && btn && playQueue.length === 0) btn.innerHTML = i18n.t('tapAgain');
 };
@@ -1089,10 +1088,8 @@ window.markPlayed = async function(btn) {
   btn.disabled = true;
   btn.textContent = '✓';
   btn.style.opacity = '0.4';
-  const query = btn.dataset.query || '';
-  const dashIdx = query.indexOf(' - ');
-  const song_name = dashIdx !== -1 ? query.slice(0, dashIdx).trim() : query;
-  const artist = dashIdx !== -1 ? query.slice(dashIdx + 3).trim() : '';
+  const song_name = btn.dataset.name || '';
+  const artist = btn.dataset.artist || '';
   try {
     const res = await api.played(song_name, artist, '');
     mlog('played API done: ' + JSON.stringify(res));

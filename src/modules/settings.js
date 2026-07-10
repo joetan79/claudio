@@ -36,3 +36,24 @@ export function getUserVoiceId(uid) {
 export function resolveVoiceRefForUser(uid) {
   return resolveVoiceRef(getUserVoiceId(uid));
 }
+
+export function getAiSettings() {
+  const db = getSystemDb();
+  const rows = db.prepare(`SELECT key, value FROM settings WHERE key IN ('ai_provider', 'ai_model')`).all();
+  const map = Object.fromEntries(rows.map(r => [r.key, r.value]));
+  return {
+    provider: map.ai_provider || 'anthropic',
+    model: map.ai_model || process.env.CLAUDE_MODEL || 'claude-haiku-4-5',
+  };
+}
+
+export function setAiSettings({ provider, model }) {
+  const db = getSystemDb();
+  const stmt = db.prepare(`
+    INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+  `);
+  const now = Date.now();
+  if (provider !== undefined) stmt.run('ai_provider', provider, now);
+  if (model !== undefined) stmt.run('ai_model', model, now);
+}

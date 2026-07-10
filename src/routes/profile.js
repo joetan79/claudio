@@ -71,7 +71,9 @@ router.get('/history', (req, res) => {
 
 router.get('/keys', (req, res) => {
   const db = getSystemDb();
-  const user = db.prepare('SELECT anthropic_key, fish_key FROM users WHERE id = ?').get(req.user.uid);
+  const user = db.prepare(
+    'SELECT anthropic_key, own_ai_provider, own_ai_model FROM users WHERE id = ?'
+  ).get(req.user.uid);
   if (!user) return res.status(404).json({ error: 'User not found' });
 
   function maskStored(ciphertext) {
@@ -80,8 +82,9 @@ router.get('/keys', (req, res) => {
   }
 
   res.json({
-    anthropic: maskStored(user.anthropic_key),
-    fish: maskStored(user.fish_key),
+    key: maskStored(user.anthropic_key),
+    provider: user.own_ai_provider || 'anthropic',
+    model: user.own_ai_model || null,
   });
 });
 
@@ -89,18 +92,23 @@ router.put('/keys', (req, res) => {
   if (!isEncryptionEnabled())
     return res.status(503).json({ error: 'BYO key feature is not enabled on this server' });
 
-  const { anthropic, fish } = req.body ?? {};
-  if (anthropic === undefined && fish === undefined)
-    return res.status(400).json({ error: 'anthropic or fish required' });
+  const { key, provider, model } = req.body ?? {};
+  if (key === undefined && provider === undefined && model === undefined)
+    return res.status(400).json({ error: 'key, provider, or model required' });
+  if (provider !== undefined && !['anthropic', 'openrouter'].includes(provider))
+    return res.status(400).json({ error: "provider must be 'anthropic' or 'openrouter'" });
 
   const db = getSystemDb();
-  if (anthropic !== undefined) {
-    const value = anthropic === '' ? null : encrypt(anthropic);
+  if (key !== undefined) {
+    const value = key === '' ? null : encrypt(key);
     db.prepare('UPDATE users SET anthropic_key = ? WHERE id = ?').run(value, req.user.uid);
   }
-  if (fish !== undefined) {
-    const value = fish === '' ? null : encrypt(fish);
-    db.prepare('UPDATE users SET fish_key = ? WHERE id = ?').run(value, req.user.uid);
+  if (provider !== undefined) {
+    db.prepare('UPDATE users SET own_ai_provider = ? WHERE id = ?').run(provider, req.user.uid);
+  }
+  if (model !== undefined) {
+    const value = model === '' ? null : model;
+    db.prepare('UPDATE users SET own_ai_model = ? WHERE id = ?').run(value, req.user.uid);
   }
   res.json({ ok: true });
 });

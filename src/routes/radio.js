@@ -42,12 +42,14 @@ router.post('/decide', async (req, res) => {
   try {
     decision = await djDecision(uid, message, context);
   } catch (e) {
-    if (e.code === 'OWN_KEY_INVALID') return res.status(e.status || 401).json({ error: e.message, code: 'OWN_KEY_INVALID' });
+    if (e.code === 'OWN_KEY_INVALID' || e.code === 'AI_KEY_REQUIRED')
+      return res.status(e.status || 401).json({ error: e.message, code: e.code });
     throw e;
   }
 
   // TTS runs in parallel with song resolution.
-  // Per song: NCM first → use normalized name+artist as YouTube query for accuracy.
+  // Per song: NCM first (best-effort) → use normalized name+artist as YouTube query for accuracy.
+  // YT Music is the source of truth for display metadata when it resolves the song.
   let audioUrl, playWithUrls;
   try {
     [audioUrl, playWithUrls] = await Promise.all([
@@ -60,8 +62,17 @@ router.post('/decide', async (req, res) => {
           const ncm = await resolveSong(song.query).catch(() => null);
           const ytQuery = ncm ? `${ncm.name} ${ncm.artist}` : song.query;
           const yt = await searchYouTube(ytQuery).catch(() => null);
-          const query = ncm ? `${ncm.name} - ${ncm.artist}` : song.query;
-          return { ...song, query, ncm, yt };
+
+          let song_name, artist;
+          if (yt?.source === 'ytmusic') {
+            song_name = yt.title;
+            artist = yt.artist || '';
+          } else {
+            song_name = ncm?.name || song.query;
+            artist = ncm?.artist || song.artist || '';
+          }
+          const query = artist ? `${song_name} - ${artist}` : song_name;
+          return { ...song, query, song_name, artist, ncm, yt };
         })
       ),
     ]);
@@ -163,7 +174,8 @@ router.post('/plan/generate', async (req, res) => {
       return null;
     });
   } catch (e) {
-    if (e.code === 'OWN_KEY_INVALID') return res.status(e.status || 401).json({ error: e.message, code: 'OWN_KEY_INVALID' });
+    if (e.code === 'OWN_KEY_INVALID' || e.code === 'AI_KEY_REQUIRED')
+      return res.status(e.status || 401).json({ error: e.message, code: e.code });
     throw e;
   }
   const result = { ...decision, audioUrl: audioUrl ?? null };

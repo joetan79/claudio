@@ -2,7 +2,7 @@ import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import { getSystemDb } from '../db/index.js';
 import { requireAdmin } from '../middleware/admin.js';
-import { getDjVoices, setDjVoices } from '../modules/settings.js';
+import { getDjVoices, setDjVoices, getAiSettings, setAiSettings } from '../modules/settings.js';
 
 const router = Router();
 router.use(requireAdmin);
@@ -12,7 +12,7 @@ const THIRTY_DAYS = 30 * 24 * 60 * 60 * 1000;
 router.get('/users', (req, res) => {
   const db = getSystemDb();
   const users = db.prepare(
-    'SELECT id, username, email, role, status, created_at, last_login, anthropic_key, fish_key FROM users ORDER BY created_at DESC'
+    'SELECT id, username, email, role, status, created_at, last_login, anthropic_key, fish_key, ai_policy FROM users ORDER BY created_at DESC'
   ).all();
   const now = Date.now();
   const withActivity = users.map(u => ({
@@ -24,6 +24,7 @@ router.get('/users', (req, res) => {
     created_at: u.created_at,
     last_login: u.last_login,
     has_own_key: !!(u.anthropic_key || u.fish_key),
+    ai_policy: u.ai_policy || 'global',
     activity: u.last_login && (now - u.last_login) < THIRTY_DAYS ? 'active' : 'inactive',
   }));
   res.json({
@@ -117,6 +118,32 @@ router.delete('/users/:uid', (req, res) => {
   const db = getSystemDb();
   const result = db.prepare('DELETE FROM users WHERE id = ?').run(req.params.uid);
   if (result.changes === 0) return res.status(404).json({ error: 'User not found' });
+  res.json({ ok: true });
+});
+
+router.put('/users/:uid/ai-policy', (req, res) => {
+  const { policy } = req.body ?? {};
+  if (!['global', 'own_only'].includes(policy))
+    return res.status(400).json({ error: "policy must be 'global' or 'own_only'" });
+  if (req.params.uid === req.user.uid)
+    return res.status(400).json({ error: 'Cannot change your own AI policy' });
+  const db = getSystemDb();
+  const result = db.prepare('UPDATE users SET ai_policy = ? WHERE id = ?').run(policy, req.params.uid);
+  if (result.changes === 0) return res.status(404).json({ error: 'User not found' });
+  res.json({ ok: true });
+});
+
+router.get('/ai-settings', (req, res) => {
+  res.json(getAiSettings());
+});
+
+router.put('/ai-settings', (req, res) => {
+  const { provider, model } = req.body ?? {};
+  if (provider !== undefined && !['anthropic', 'openrouter'].includes(provider))
+    return res.status(400).json({ error: "provider must be 'anthropic' or 'openrouter'" });
+  if (model !== undefined && (typeof model !== 'string' || !model.trim()))
+    return res.status(400).json({ error: 'model must be a non-empty string' });
+  setAiSettings({ provider, model: model !== undefined ? model.trim() : undefined });
   res.json({ ok: true });
 });
 

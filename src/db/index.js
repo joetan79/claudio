@@ -69,6 +69,11 @@ export function getSystemDb() {
   // Add DJ voice selection column to existing DBs (no-op on new ones)
   try { systemDb.exec(`ALTER TABLE users ADD COLUMN dj_voice TEXT DEFAULT NULL`); } catch {}
 
+  // Add per-user AI policy/provider/model columns to existing DBs (no-op on new ones)
+  try { systemDb.exec(`ALTER TABLE users ADD COLUMN ai_policy TEXT NOT NULL DEFAULT 'global'`); } catch {}
+  try { systemDb.exec(`ALTER TABLE users ADD COLUMN own_ai_provider TEXT DEFAULT 'anthropic'`); } catch {}
+  try { systemDb.exec(`ALTER TABLE users ADD COLUMN own_ai_model TEXT DEFAULT NULL`); } catch {}
+
   // Seed default DJ voice config on first start
   const voicesRow = systemDb.prepare(`SELECT value FROM settings WHERE key = 'dj_voices'`).get();
   if (!voicesRow) {

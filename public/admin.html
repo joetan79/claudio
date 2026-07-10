@@ -129,6 +129,7 @@
   let chartUsers = null;
   let chartDaily = null;
   let voicesData = null;
+  let aiSettingsData = null;
 
   function fmtDate(ts) {
     if (!ts) return '—';
@@ -158,6 +159,7 @@
     const result = await apiFetch('GET', '/api/admin/users');
     usersData = result;
     voicesData = await apiFetch('GET', '/api/admin/voices').catch(() => ({ voices: [] }));
+    aiSettingsData = await apiFetch('GET', '/api/admin/ai-settings').catch(() => ({ provider: 'anthropic', model: '' }));
     render();
   }
 
@@ -212,6 +214,15 @@
     } catch (e) { alert('Error: ' + e.message); }
   }
 
+  async function toggleAiPolicy(uid, currentPolicy) {
+    const newPolicy = currentPolicy === 'own_only' ? 'global' : 'own_only';
+    if (!confirm(`Set AI policy to "${newPolicy}" for this user?`)) return;
+    try {
+      await apiFetch('PUT', `/api/admin/users/${uid}/ai-policy`, { policy: newPolicy });
+      await loadUsers();
+    } catch (e) { alert('Error: ' + e.message); }
+  }
+
   function renderLogin(errorMsg) {
     document.getElementById('app').innerHTML = `
 <div class="auth-wrap">
@@ -257,10 +268,12 @@
   <td>${fmtDate(u.last_login)}</td>
   <td><span class="badge badge-${u.status === 'disabled' ? 'disabled' : 'active'}">${u.status}</span></td>
   <td><span class="badge ${u.has_own_key ? 'badge-ownkey' : 'badge-defaultkey'}">${u.has_own_key ? 'Yes' : 'No'}</span></td>
+  <td><span class="badge ${u.ai_policy === 'own_only' ? 'badge-ownkey' : 'badge-defaultkey'}">${u.ai_policy === 'own_only' ? 'Own Only' : 'Global'}</span></td>
   <td>
     <button class="btn-action btn-reset" onclick="resetPassword('${u.id}','${u.username.replace(/'/g,"\\'")}')">Reset PW</button>
     ${u.id !== currentUser?.uid ? `<button class="btn-action btn-status" onclick="toggleStatus('${u.id}','${u.status}')">${u.status === 'disabled' ? 'Enable' : 'Disable'}</button>` : ''}
     ${u.id !== currentUser?.uid ? `<button class="btn-action btn-role" onclick="toggleRole('${u.id}','${u.role}')">${u.role === 'admin' ? 'Demote' : 'Set as Admin'}</button>` : ''}
+    ${u.id !== currentUser?.uid ? `<button class="btn-action btn-status" onclick="toggleAiPolicy('${u.id}','${u.ai_policy}')">${u.ai_policy === 'own_only' ? 'Set Global' : 'Own Key Only'}</button>` : ''}
     ${u.id !== currentUser?.uid ? `<button class="btn-action btn-delete" onclick="deleteUser('${u.id}','${u.username.replace(/'/g,"\\'")}')">Delete</button>` : ''}
   </td>
 </tr>`).join('');
@@ -293,7 +306,7 @@
   <table>
     <thead><tr>
       <th>Username</th><th>Email</th><th>Role</th>
-      <th>Registered</th><th>Last Login</th><th>Status</th><th>Own Key</th><th>Actions</th>
+      <th>Registered</th><th>Last Login</th><th>Status</th><th>Own Key</th><th>AI Policy</th><th>Actions</th>
     </tr></thead>
     <tbody>${rows}</tbody>
   </table>`}
@@ -314,6 +327,24 @@
     </div>`).join('')}
     <button class="btn-action btn-role" id="btn-save-voices" style="margin-top:8px">Save Voices</button>
     <span id="voices-save-msg" style="display:none;color:var(--success);font-size:0.85rem;margin-left:10px">Saved!</span>
+  </div>
+</div>
+<div class="usage-section">
+  <div class="usage-header">
+    <span class="usage-title">AI Settings</span>
+  </div>
+  <div class="table-wrap" style="padding:18px">
+    <div style="display:flex;gap:10px;margin-bottom:10px;align-items:center">
+      <select id="ai-provider-select"
+        style="flex:1;background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:9px 12px;font-size:0.88rem">
+        <option value="anthropic">Anthropic</option>
+        <option value="openrouter">OpenRouter</option>
+      </select>
+      <input type="text" id="ai-model-input" placeholder="Model"
+        style="flex:1.4;background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:9px 12px;font-size:0.88rem;font-family:monospace" />
+    </div>
+    <button class="btn-action btn-role" id="btn-save-ai-settings" style="margin-top:8px">Save AI Settings</button>
+    <span id="ai-settings-save-msg" style="display:none;color:var(--success);font-size:0.85rem;margin-left:10px">Saved!</span>
   </div>
 </div>
 <div class="usage-section">
@@ -344,7 +375,30 @@
       btn.addEventListener('click', () => setUsageDays(Number(btn.dataset.days)));
     });
     document.getElementById('btn-save-voices')?.addEventListener('click', saveVoices);
+    const providerSelect = document.getElementById('ai-provider-select');
+    const modelInput = document.getElementById('ai-model-input');
+    if (providerSelect) providerSelect.value = aiSettingsData?.provider || 'anthropic';
+    if (modelInput) modelInput.value = aiSettingsData?.model || '';
+    document.getElementById('btn-save-ai-settings')?.addEventListener('click', saveAiSettings);
     loadUsage();
+  }
+
+  async function saveAiSettings() {
+    const provider = document.getElementById('ai-provider-select').value;
+    const model = document.getElementById('ai-model-input').value.trim();
+    if (!model) { alert('Model is required.'); return; }
+    const btn = document.getElementById('btn-save-ai-settings');
+    btn.disabled = true;
+    try {
+      await apiFetch('PUT', '/api/admin/ai-settings', { provider, model });
+      aiSettingsData = { provider, model };
+      const msg = document.getElementById('ai-settings-save-msg');
+      if (msg) { msg.style.display = 'inline'; setTimeout(() => { msg.style.display = 'none'; }, 2000); }
+    } catch (e) {
+      alert('Error: ' + e.message);
+    } finally {
+      btn.disabled = false;
+    }
   }
 
   async function saveVoices() {
@@ -484,6 +538,7 @@
         currentUser = { uid: data.uid, username: data.username };
         usersData = await apiFetch('GET', '/api/admin/users');
         voicesData = await apiFetch('GET', '/api/admin/voices').catch(() => ({ voices: [] }));
+        aiSettingsData = await apiFetch('GET', '/api/admin/ai-settings').catch(() => ({ provider: 'anthropic', model: '' }));
         renderDashboard();
       } catch (e) {
         if (e.status === 401 || e.status === 403) {
