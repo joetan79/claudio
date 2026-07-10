@@ -30,10 +30,15 @@ function mlog(...args) {
 // ── Audio ──────────────────────────────────────────────────────────────────
 let currentAudio = null;
 
-// Purely visual: toggles the DJ orb's "speaking" pulse to the TTS audio's
-// play/pause/ended state. Does not affect playback in any way.
+// Purely visual: toggles the DJ orb's "speaking" pulse and the frequency
+// ring (Phase 6C) to the TTS audio's play/pause/ended state. Does not affect
+// playback in any way.
 function attachDjOrbPulseHooks(audio) {
-  const toggle = on => document.getElementById('dj-orb')?.classList.toggle('speaking', on);
+  const toggle = on => {
+    document.getElementById('dj-orb')?.classList.toggle('speaking', on);
+    freqRingTtsPlaying = on;
+    updateFreqRingActive();
+  };
   audio.addEventListener('play', () => toggle(true));
   audio.addEventListener('pause', () => toggle(false));
   audio.addEventListener('ended', () => toggle(false));
@@ -519,14 +524,15 @@ function renderPlayerContent() {
 
   return `
 <div class="player-columns">
-  <div class="now-playing-region">
-    <div class="now-playing-visual" id="now-playing-visual">
+  <div class="now-playing-region ${npCollapsed ? 'collapsed' : ''}" id="now-playing-region">
+    <div class="now-playing-visual ${npCollapsed ? 'now-playing-visual--mini' : ''}" id="now-playing-visual">
       <div class="now-playing-video-slot" id="now-playing-video-slot"></div>
       <div class="dj-orb" id="dj-orb">
         <div class="dj-orb-ring"></div>
         <div class="dj-orb-ring"></div>
         <div class="dj-orb-core"></div>
       </div>
+      <button class="np-collapse-btn" id="np-collapse-toggle" aria-label="Collapse Now Playing">${npCollapsed ? '▲' : '▼'}</button>
     </div>
     <div class="now-playing-title-block">
       <div class="now-playing-song" id="now-playing-song">${esc(i18n.t('noSongPlaying'))}</div>
@@ -534,7 +540,10 @@ function renderPlayerContent() {
     </div>
     <div class="now-playing-controls">
       <button class="np-ctrl-btn np-ctrl-prev" id="np-btn-prev" disabled>◀◀</button>
-      <button class="np-ctrl-btn np-ctrl-playpause" id="np-btn-playpause">▶</button>
+      <div class="np-playpause-wrap">
+        <div class="np-freq-ring" id="np-freq-ring">${buildFreqRingHtml()}</div>
+        <button class="np-ctrl-btn np-ctrl-playpause" id="np-btn-playpause">▶</button>
+      </div>
       <button class="np-ctrl-btn np-ctrl-next" id="np-btn-next" disabled>▶▶</button>
     </div>
   </div>
@@ -839,6 +848,17 @@ function attachPlayerEvents() {
   document.getElementById('np-btn-playpause')?.addEventListener('click', handleNowPlayingPlayPause);
   document.getElementById('np-btn-prev')?.addEventListener('click', () => window.playPrevious());
   document.getElementById('np-btn-next')?.addEventListener('click', () => window.playNext());
+
+  // Collapse/expand toggle (Phase 6C). stopPropagation so the mini-window's
+  // own "click anywhere to expand" listener below doesn't immediately
+  // re-toggle it back after this handler already flipped the state.
+  document.getElementById('np-collapse-toggle')?.addEventListener('click', e => {
+    e.stopPropagation();
+    toggleNowPlayingCollapse();
+  });
+  document.getElementById('now-playing-visual')?.addEventListener('click', () => {
+    if (npCollapsed) toggleNowPlayingCollapse();
+  });
 
   // Queue row click = jump-play. Delegates to the row's own existing Play
   // button (already wired to toggleYT) rather than duplicating its logic.
@@ -1313,6 +1333,117 @@ function stopNowPlayingSync() {
     nowPlayingSyncTimer = null;
   }
   positionAudioContainerOffscreen();
+  // Leaving the player view — collapse state is in-memory only (point 4).
+  npCollapsed = false;
+}
+
+// ── Now Playing collapse/expand (Phase 6C, visual layer only) ──────────────
+// In-memory only (not persisted); reset to expanded on song change (below)
+// and on leaving the player view (stopNowPlayingSync above).
+let npCollapsed = false;
+
+function updateCollapseToggleGlyph() {
+  const btn = document.getElementById('np-collapse-toggle');
+  if (btn) btn.textContent = npCollapsed ? '▲' : '▼';
+}
+
+// Auto-reset (no user-facing toggle animation needed — this fires on
+// background events like auto-advancing to the next queued song).
+function resetNowPlayingCollapse() {
+  if (!npCollapsed) return;
+  npCollapsed = false;
+  const region = document.getElementById('now-playing-region');
+  const visual = document.getElementById('now-playing-visual');
+  region?.classList.remove('collapsed');
+  if (visual) {
+    visual.classList.remove('now-playing-visual--mini');
+    visual.style.transition = '';
+    visual.style.transform = '';
+  }
+  updateCollapseToggleGlyph();
+}
+
+// Briefly re-runs the existing, untouched syncNowPlayingUI() on every frame
+// for the duration of the collapse/expand transition, so the real embedded
+// video (repositioned by that function to overlay .now-playing-video-slot)
+// visually keeps up with the animating mini-window instead of snapping to
+// its final spot only once the next 400ms poll tick happens.
+function runCollapseTransitionSync(durationMs) {
+  const start = performance.now ? performance.now() : Date.now();
+  function tick() {
+    syncNowPlayingUI();
+    const now = performance.now ? performance.now() : Date.now();
+    if (now - start < durationMs) requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+}
+
+// User-initiated toggle — FLIP-animates .now-playing-visual (video/mini
+// window) between its normal in-flow position and the fixed mini-window
+// spot via a transform, since animating between position:static and
+// position:fixed can't be done with a plain CSS transition.
+function setNowPlayingCollapsed(collapsed) {
+  if (npCollapsed === collapsed) return;
+  const visual = document.getElementById('now-playing-visual');
+  const region = document.getElementById('now-playing-region');
+  if (!visual || !region) { npCollapsed = collapsed; return; }
+
+  const firstRect = visual.getBoundingClientRect();
+
+  npCollapsed = collapsed;
+  region.classList.toggle('collapsed', collapsed);
+  visual.classList.toggle('now-playing-visual--mini', collapsed);
+  updateCollapseToggleGlyph();
+
+  const lastRect = visual.getBoundingClientRect();
+  const dx = firstRect.left - lastRect.left;
+  const dy = firstRect.top - lastRect.top;
+  const scaleX = firstRect.width / lastRect.width;
+  const scaleY = firstRect.height / lastRect.height;
+
+  visual.style.transition = 'none';
+  visual.style.transformOrigin = 'top left';
+  visual.style.transform = `translate(${dx}px, ${dy}px) scale(${scaleX}, ${scaleY})`;
+  void visual.offsetWidth; // force reflow so the "from" transform actually applies before animating
+  visual.style.transition = 'transform 0.3s ease';
+  visual.style.transform = 'none';
+  visual.addEventListener('transitionend', () => {
+    visual.style.transition = '';
+    visual.style.transform = '';
+  }, { once: true });
+
+  runCollapseTransitionSync(350);
+}
+
+function toggleNowPlayingCollapse() {
+  setNowPlayingCollapsed(!npCollapsed);
+}
+
+// ── Frequency ring (Phase 6C, visual layer only) ────────────────────────────
+// Purely decorative CSS animation. Two independent "is something audible
+// playing" signals feed the same ring: YT video state (read-only, via the
+// existing syncNowPlayingUI poll below — onStateChange itself is untouched)
+// and the DJ TTS currentAudio play/pause/ended events (attachDjOrbPulseHooks
+// above, same hook that already drives the 6B orb pulse).
+const FREQ_RING_BAR_COUNT = 20;
+let freqRingYtPlaying = false;
+let freqRingTtsPlaying = false;
+
+function buildFreqRingHtml() {
+  let html = '';
+  for (let i = 0; i < FREQ_RING_BAR_COUNT; i++) {
+    const angle = (360 / FREQ_RING_BAR_COUNT) * i;
+    const duration = (0.7 + Math.random() * 0.6).toFixed(2);
+    const delay = (Math.random() * 1.2).toFixed(2);
+    html += `<div class="np-freq-bar" style="transform:rotate(${angle}deg)">` +
+      `<div class="np-freq-bar-inner" style="animation-duration:${duration}s;animation-delay:-${delay}s"></div>` +
+      `</div>`;
+  }
+  return html;
+}
+
+function updateFreqRingActive() {
+  document.getElementById('np-freq-ring')?.classList.toggle('active', freqRingYtPlaying || freqRingTtsPlaying);
 }
 
 function positionAudioContainerOffscreen() {
@@ -1335,6 +1466,7 @@ function updateNowPlayingTitle(song) {
   const key = name + '|' + artist;
   if (key === lastNpTitleKey) return;
   lastNpTitleKey = key;
+  resetNowPlayingCollapse(); // song changed — point 4: reset to expanded
   titleEl.textContent = name || i18n.t('noSongPlaying');
   artistEl.textContent = artist;
   [titleEl, artistEl].forEach(el => {
@@ -1357,6 +1489,11 @@ function syncNowPlayingUI() {
   const topbar = document.querySelector('.topbar');
   if (topbar) {
     document.documentElement.style.setProperty('--topbar-h', topbar.getBoundingClientRect().height + 'px');
+  }
+  // Keeps the collapsed mini-window's bottom offset clear of the ask-form.
+  const askForm = document.querySelector('.ask-form');
+  if (askForm) {
+    document.documentElement.style.setProperty('--askform-h', askForm.getBoundingClientRect().height + 'px');
   }
 
   const slot = document.getElementById('now-playing-video-slot');
@@ -1397,6 +1534,8 @@ function syncNowPlayingUI() {
       try { playing = ytApiReady && ytPlayers[currentPlayingIndex].getPlayerState() === YT.PlayerState.PLAYING; } catch (e) {}
     }
     btnPlayPause.textContent = playing ? '⏸' : '▶';
+    freqRingYtPlaying = playing;
+    updateFreqRingActive();
   }
   if (btnPrev) btnPrev.disabled = !(playQueue.length > 0 && playQueueIndex > 0);
   if (btnNext) btnNext.disabled = !(playQueue.length > 0 && playQueueIndex < playQueue.length - 1);
