@@ -938,9 +938,9 @@ function markYTUnavailable(btn, songName, artist, index) {
   }
 }
 
-function createYTPlayer(index, videoId, songName, artist, retryCount = 0) {
+function createYTPlayer(index, videoId, songName, artist, altIndex = 0) {
   if (!ytApiReady) {
-    setTimeout(() => createYTPlayer(index, videoId, songName, artist, retryCount), 500);
+    setTimeout(() => createYTPlayer(index, videoId, songName, artist, altIndex), 500);
     return;
   }
   const container = document.getElementById('audio-container');
@@ -973,30 +973,20 @@ function createYTPlayer(index, videoId, songName, artist, retryCount = 0) {
         );
       },
       onError: function(e) {
-        mlog('onError:', e.data, 'retry:', retryCount);
+        mlog('onError:', e.data, 'altIndex:', altIndex);
         const btn = document.getElementById('yt-btn-' + index);
-        if (e.data === 150 || e.data === 101) {
-          if (retryCount < 2) {
-            // Try a different video — lyric/live versions are usually less restricted
-            const retryQueries = [
-              `${songName} ${artist} lyric`,
-              `${songName} ${artist} live`,
-            ];
-            const q = retryQueries[retryCount];
+        if (e.data === 150 || e.data === 101 || e.data === 100) {
+          const song = window._currentSongs?.[index];
+          const altIds = song?.yt?.altIds || [];
+          const nextIndex = altIndex + 1;
+          const nextId = altIds[nextIndex];
+          if (nextId) {
+            console.log(`[yt] onError ${e.data} on ${videoId} (song ${index}) → switching to ${nextId} (altIndex ${nextIndex})`);
+            mlog('switching source:', videoId, '->', nextId);
             if (btn) btn.textContent = '⏳ Loading...';
-            api.request('GET', '/api/radio/ytsr?q=' + encodeURIComponent(q))
-              .then(data => {
-                if (data.yt?.videoId && data.yt.videoId !== videoId) {
-                  if (window._currentSongs?.[index]) {
-                    window._currentSongs[index] = { ...window._currentSongs[index], yt: data.yt };
-                  }
-                  createYTPlayer(index, data.yt.videoId, songName, artist, retryCount + 1);
-                } else {
-                  markYTUnavailable(btn, songName, artist, index);
-                }
-              })
-              .catch(() => markYTUnavailable(btn, songName, artist, index));
+            createYTPlayer(index, nextId, songName, artist, nextIndex);
           } else {
+            console.log(`[yt] onError ${e.data} on ${videoId} (song ${index}) → no more candidates, marking unavailable`);
             markYTUnavailable(btn, songName, artist, index);
           }
         } else {

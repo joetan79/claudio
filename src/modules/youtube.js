@@ -4,8 +4,11 @@ import { Innertube, YTNodes } from 'youtubei.js';
 const PREFERRED = ['official', 'music', 'vevo', 'topic'];
 const BLOCKED_TITLE = /cover|翻唱|remix|live|现场|伴奏|instrumental|karaoke/i;
 const MAX_CANDIDATES = 5;
-const EMBED_CHECK_TIMEOUT_MS = 4000;
+const MAX_ALT_IDS = 3;
 const EMBED_CACHE_LIMIT = 500;
+const DATA_API_TIMEOUT_MS = 4000;
+const DATA_API_BATCH_SIZE = 50;
+const YOUTUBE_API_KEY = process.env.YOUTUBE_API_KEY;
 
 let innertubePromise = null;
 function getInnertube() {
@@ -13,7 +16,7 @@ function getInnertube() {
   return innertubePromise;
 }
 
-// FIFO-evicted cache: videoId -> boolean (embeddable & playable)
+// FIFO-evicted cache: videoId -> boolean (embeddable per YouTube Data API)
 const embedCache = new Map();
 
 function cacheGet(videoId) {
@@ -28,38 +31,65 @@ function cacheSet(videoId, value) {
   embedCache.set(videoId, value);
 }
 
-export async function checkEmbeddable(videoId) {
-  const cached = cacheGet(videoId);
-  if (cached !== undefined) return cached;
+// Batched YouTube Data API v3 embeddability check. Not bound by the VPS's IP
+// reputation the way youtubei.js's getInfo() is — this is an official, key-authed
+// endpoint. Fails open (treats ids as embeddable) when the key is missing or the
+// call errors, so a Data API outage never blocks a decision.
+export async function checkEmbeddableBatch(videoIds) {
+  const uniqueIds = [...new Set(videoIds.filter(Boolean))];
+  const result = new Map();
+  if (!uniqueIds.length) return result;
 
-  let ok = false;
-  try {
-    const yt = await getInnertube();
-    const info = await Promise.race([
-      yt.getInfo(videoId),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('getInfo timeout')), EMBED_CHECK_TIMEOUT_MS)),
-    ]);
-    const status = info.playability_status;
-    ok = status?.status === 'OK' && status?.embeddable !== false;
-  } catch (e) {
-    ok = false;
+  const uncached = [];
+  for (const id of uniqueIds) {
+    const cached = cacheGet(id);
+    if (cached !== undefined) result.set(id, cached);
+    else uncached.push(id);
+  }
+  if (!uncached.length) return result;
+
+  if (!YOUTUBE_API_KEY) {
+    console.warn(`[youtube] YOUTUBE_API_KEY not configured, skipping embeddability check for ${uncached.length} video(s)`);
+    for (const id of uncached) result.set(id, true);
+    return result;
   }
 
-  cacheSet(videoId, ok);
-  return ok;
-}
+  for (let i = 0; i < uncached.length; i += DATA_API_BATCH_SIZE) {
+    const batch = uncached.slice(i, i + DATA_API_BATCH_SIZE);
+    try {
+      const url = `https://www.googleapis.com/youtube/v3/videos?part=status,contentDetails&id=${batch.join(',')}&key=${YOUTUBE_API_KEY}`;
+      const res = await fetch(url, { signal: AbortSignal.timeout(DATA_API_TIMEOUT_MS) });
+      if (!res.ok) {
+        const errText = await res.text();
+        console.warn(`[youtube] Data API videos.list failed (${res.status}): ${errText}, skipping check for this batch`);
+        for (const id of batch) result.set(id, true);
+        continue;
+      }
+      const data = await res.json();
+      const found = new Set();
+      for (const item of data.items || []) {
+        found.add(item.id);
+        const embeddable = item.status?.embeddable === true;
+        const isPublic = item.status?.privacyStatus === 'public';
+        const hasRegionRestriction = !!item.contentDetails?.regionRestriction;
+        const ok = embeddable && isPublic && !hasRegionRestriction;
+        result.set(item.id, ok);
+        cacheSet(item.id, ok);
+      }
+      // ids the API didn't return at all (deleted/private/not found) count as not-ok
+      for (const id of batch) {
+        if (!found.has(id)) {
+          result.set(id, false);
+          cacheSet(id, false);
+        }
+      }
+    } catch (e) {
+      console.warn(`[youtube] Data API videos.list error: ${e.message}, skipping check for this batch`);
+      for (const id of batch) result.set(id, true);
+    }
+  }
 
-// Concurrently checks all candidates, then returns the first one (in original order)
-// that passed the embeddability check.
-async function pickEmbeddable(candidates, sourceLabel, query) {
-  if (!candidates.length) return null;
-  const results = await Promise.all(
-    candidates.map(async (c) => ({ candidate: c, ok: await checkEmbeddable(c.videoId) }))
-  );
-  const picked = results.find(r => r.ok)?.candidate ?? null;
-  const skipped = results.filter(r => !r.ok).length;
-  console.log(`[youtube] ${sourceLabel} "${query}": selected ${picked?.videoId ?? 'none'}, skipped ${skipped} not-embeddable`);
-  return picked;
+  return result;
 }
 
 function orderByPreference(candidates) {
@@ -123,40 +153,66 @@ async function searchYouTubeYtsr(query) {
   let videos = await searchVideosYtsr(`${query} official audio`);
   if (!videos.length) videos = await searchVideosYtsr(`${query} audio`);
   if (!videos.length) return null;
-  return { ...pickBest(videos), source: 'ytsr' };
+  const best = pickBest(videos);
+  return { ...best, source: 'ytsr', altIds: [best.videoId] };
+}
+
+// Picks the first embeddable candidate (in original order) for each still-unresolved
+// song, using ONE batched Data API call across every candidate in this tier.
+async function resolveTier(candidatesPerSong, winners, queries, tierLabel) {
+  const allIds = [];
+  candidatesPerSong.forEach((cands, i) => {
+    if (winners[i]) return;
+    cands.forEach(c => allIds.push(c.videoId));
+  });
+  if (!allIds.length) return;
+
+  const embedMap = await checkEmbeddableBatch(allIds);
+
+  candidatesPerSong.forEach((cands, i) => {
+    if (winners[i] || !cands.length) return;
+    const passing = cands.filter(c => embedMap.get(c.videoId) === true);
+    const skipped = cands.length - passing.length;
+    if (passing.length) {
+      const altIds = passing.slice(0, MAX_ALT_IDS).map(c => c.videoId);
+      winners[i] = { ...passing[0], altIds };
+      console.log(`[youtube] ${tierLabel} "${queries[i]}": candidates=${cands.length} passed=${passing.length} skipped=${skipped} selected=${winners[i].videoId}`);
+    } else {
+      console.log(`[youtube] ${tierLabel} "${queries[i]}": candidates=${cands.length} passed=0 skipped=${skipped}, falling through`);
+    }
+  });
+}
+
+// Resolves one videoId per query, batching every tier's Data API embeddability
+// checks across the whole decision (all songs at once) to minimize quota usage.
+export async function resolveSongVideos(queries) {
+  const n = queries.length;
+  const winners = new Array(n).fill(null);
+
+  const tier1 = await Promise.all(queries.map(q => searchYTMusic(q).catch(() => [])));
+  await resolveTier(tier1, winners, queries, 'ytmusic');
+
+  const needTier2 = winners.map((w, i) => (w ? -1 : i)).filter(i => i !== -1);
+  if (needTier2.length) {
+    const tier2Results = await Promise.all(needTier2.map(i => searchYouTubeInnertube(queries[i]).catch(() => [])));
+    const tier2 = new Array(n).fill(null).map(() => []);
+    needTier2.forEach((songIdx, k) => { tier2[songIdx] = tier2Results[k]; });
+    await resolveTier(tier2, winners, queries, 'search');
+  }
+
+  const needTier3 = winners.map((w, i) => (w ? -1 : i)).filter(i => i !== -1);
+  if (needTier3.length) {
+    const tier3Results = await Promise.all(needTier3.map(i => searchYouTubeYtsr(queries[i]).catch(() => null)));
+    needTier3.forEach((songIdx, k) => {
+      winners[songIdx] = tier3Results[k];
+      console.log(`[youtube] ytsr "${queries[songIdx]}": selected=${winners[songIdx]?.videoId ?? 'none'} (unchecked fallback)`);
+    });
+  }
+
+  return winners;
 }
 
 export async function searchYouTube(query) {
-  try {
-    const candidates = await searchYTMusic(query);
-    if (candidates.length) {
-      const picked = await pickEmbeddable(candidates, 'ytmusic', query);
-      if (picked) return picked;
-      console.warn(`[youtube] all YT Music candidates for "${query}" failed embeddability check, falling back to youtubei.js search`);
-    } else {
-      console.warn(`[youtube] YT Music returned no results for "${query}", falling back to youtubei.js search`);
-    }
-  } catch (e) {
-    console.warn(`[youtube] YT Music search failed for "${query}" (${e.message}), falling back to youtubei.js search`);
-  }
-
-  try {
-    const candidates = await searchYouTubeInnertube(query);
-    if (candidates.length) {
-      const picked = await pickEmbeddable(candidates, 'search', query);
-      if (picked) return picked;
-      console.warn(`[youtube] all youtubei.js candidates for "${query}" failed embeddability check, falling back to ytsr`);
-    } else {
-      console.warn(`[youtube] youtubei.js returned no results for "${query}", falling back to ytsr`);
-    }
-  } catch (e) {
-    console.warn(`[youtube] youtubei.js search failed for "${query}" (${e.message}), falling back to ytsr`);
-  }
-
-  try {
-    return await searchYouTubeYtsr(query);
-  } catch (e) {
-    console.error('YouTube search failed:', e.message);
-    return null;
-  }
+  const [result] = await resolveSongVideos([query]);
+  return result;
 }

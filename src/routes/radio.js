@@ -4,7 +4,7 @@ import { getUserDb } from '../db/index.js';
 import { djDecision, getTimeOfDay } from '../modules/claude.js';
 import { synthesize } from '../modules/tts.js';
 import { resolveSong, getSongUrl } from '../modules/ncm.js';
-import { searchYouTube } from '../modules/youtube.js';
+import { searchYouTube, resolveSongVideos } from '../modules/youtube.js';
 import { resolveVoiceRefForUser } from '../modules/settings.js';
 
 const router = Router();
@@ -47,35 +47,44 @@ router.post('/decide', async (req, res) => {
     throw e;
   }
 
-  // TTS runs in parallel with song resolution.
-  // Per song: NCM first (best-effort) → use normalized name+artist as YouTube query for accuracy.
+  // TTS runs in parallel with NCM lookup + YouTube resolution.
+  // NCM first (best-effort) → normalized name+artist becomes the YouTube query.
   // YT Music is the source of truth for display metadata when it resolves the song.
+  // All songs' candidates are checked for embeddability in as few batched Data API
+  // calls as possible (resolveSongVideos), rather than one call per song.
   let audioUrl, playWithUrls;
   try {
-    [audioUrl, playWithUrls] = await Promise.all([
+    const songs = decision.play || [];
+    let ncmResults;
+    [audioUrl, ncmResults] = await Promise.all([
       synthesize(decision.say, { uid, voiceRef: resolveVoiceRefForUser(uid) }).catch(e => {
         if (e.code === 'OWN_KEY_INVALID') throw e;
         return null;
       }),
-      Promise.all(
-        (decision.play || []).map(async (song) => {
-          const ncm = await resolveSong(song.query).catch(() => null);
-          const ytQuery = ncm ? `${ncm.name} ${ncm.artist}` : song.query;
-          const yt = await searchYouTube(ytQuery).catch(() => null);
-
-          let song_name, artist;
-          if (yt?.source === 'ytmusic') {
-            song_name = yt.title;
-            artist = yt.artist || '';
-          } else {
-            song_name = ncm?.name || song.query;
-            artist = ncm?.artist || song.artist || '';
-          }
-          const query = artist ? `${song_name} - ${artist}` : song_name;
-          return { ...song, query, song_name, artist, ncm, yt };
-        })
-      ),
+      Promise.all(songs.map(song => resolveSong(song.query).catch(() => null))),
     ]);
+
+    const ytQueries = songs.map((song, i) => {
+      const ncm = ncmResults[i];
+      return ncm ? `${ncm.name} ${ncm.artist}` : song.query;
+    });
+    const ytResults = await resolveSongVideos(ytQueries);
+
+    playWithUrls = songs.map((song, i) => {
+      const ncm = ncmResults[i];
+      const yt = ytResults[i];
+
+      let song_name, artist;
+      if (yt?.source === 'ytmusic') {
+        song_name = yt.title;
+        artist = yt.artist || '';
+      } else {
+        song_name = ncm?.name || song.query;
+        artist = ncm?.artist || song.artist || '';
+      }
+      const query = artist ? `${song_name} - ${artist}` : song_name;
+      return { ...song, query, song_name, artist, ncm, yt };
+    });
   } catch (e) {
     if (e.code === 'OWN_KEY_INVALID') return res.status(e.status || 401).json({ error: e.message, code: 'OWN_KEY_INVALID' });
     throw e;
