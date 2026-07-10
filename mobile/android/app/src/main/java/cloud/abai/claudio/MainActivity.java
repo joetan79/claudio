@@ -1,6 +1,7 @@
 package cloud.abai.claudio;
 
 import android.os.Bundle;
+import android.webkit.WebView;
 import com.getcapacitor.BridgeActivity;
 
 public class MainActivity extends BridgeActivity {
@@ -9,6 +10,16 @@ public class MainActivity extends BridgeActivity {
     public void onCreate(Bundle savedInstanceState) {
         registerPlugin(BackgroundAudioPlugin.class);
         super.onCreate(savedInstanceState);
+
+        if (getBridge() != null && getBridge().getWebView() != null) {
+            WebView webView = getBridge().getWebView();
+            // Some Android/OEM WebView builds require an explicit user gesture before starting
+            // media playback; the queue/auto-advance flow triggers playback programmatically
+            // (not from a direct tap), so this must be disabled.
+            webView.getSettings().setMediaPlaybackRequiresUserGesture(false);
+            // Swap in the visibility-spoofing client (see VisibilitySpoofingWebViewClient for why).
+            webView.setWebViewClient(new VisibilitySpoofingWebViewClient(getBridge()));
+        }
     }
 
     // Capacitor's default onPause already skips WebView.onPause()/pauseTimers() as long as the

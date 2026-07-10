@@ -781,13 +781,23 @@ let bgAudioStopTimer = null;
 function bgAudioStart() {
   if (!isNativeApp) return;
   if (bgAudioStopTimer) { clearTimeout(bgAudioStopTimer); bgAudioStopTimer = null; }
-  window.Capacitor.Plugins.BackgroundAudio?.start().catch(e => mlog('BackgroundAudio.start failed:', e.message));
+  const plugin = window.Capacitor?.Plugins?.BackgroundAudio;
+  mlog('[bgAudio] start() called, plugin found:', !!plugin);
+  if (!plugin) return;
+  plugin.start()
+    .then(() => mlog('[bgAudio] native start() resolved'))
+    .catch(e => mlog('[bgAudio] native start() failed:', e.message));
 }
 
 function bgAudioStopNow() {
   if (!isNativeApp) return;
   if (bgAudioStopTimer) { clearTimeout(bgAudioStopTimer); bgAudioStopTimer = null; }
-  window.Capacitor.Plugins.BackgroundAudio?.stop().catch(e => mlog('BackgroundAudio.stop failed:', e.message));
+  const plugin = window.Capacitor?.Plugins?.BackgroundAudio;
+  mlog('[bgAudio] stop() called, plugin found:', !!plugin);
+  if (!plugin) return;
+  plugin.stop()
+    .then(() => mlog('[bgAudio] native stop() resolved'))
+    .catch(e => mlog('[bgAudio] native stop() failed:', e.message));
 }
 
 function bgAudioScheduleStop() {
