@@ -975,9 +975,9 @@ function markYTUnavailable(btn, songName, artist, index) {
   }
 }
 
-function createYTPlayer(index, videoId, songName, artist, altIndex = 0) {
+function createYTPlayer(index, videoId, songName, artist, altIndex = 0, resumeSeconds = 0) {
   if (!ytApiReady) {
-    setTimeout(() => createYTPlayer(index, videoId, songName, artist, altIndex), 500);
+    setTimeout(() => createYTPlayer(index, videoId, songName, artist, altIndex, resumeSeconds), 500);
     return;
   }
   const container = document.getElementById('audio-container');
@@ -1003,6 +1003,9 @@ function createYTPlayer(index, videoId, songName, artist, altIndex = 0) {
         const btn = document.getElementById('yt-btn-' + index);
         if (btn && btn.textContent === '⏳ Loading...') btn.textContent = '⏸ Pause';
         e.target.playVideo();
+        if (resumeSeconds > 0) {
+          try { e.target.seekTo(resumeSeconds, true); } catch (err) {}
+        }
         const song = window._currentSongs?.[index];
         updateMediaSession(
           song?.song_name || song?.ncm?.name || song?.song || song?.query || '',
@@ -1085,6 +1088,23 @@ window.toggleYT = function(index, videoId) {
         ytPlayers[index].playVideo();
         if (btn) btn.textContent = '⏸ Pause';
         if (indicator) indicator.style.display = 'none';
+        // Defensive guard: on some devices playVideo() after a pause can silently no-op.
+        // Only kicks in if playback genuinely didn't resume — zero effect on the normal path.
+        setTimeout(() => {
+          const player = ytPlayers[index];
+          if (!player) return;
+          try {
+            if (player.getPlayerState() !== YT.PlayerState.PLAYING) {
+              mlog('resume stuck for index', index, '- rebuilding player');
+              let seekSeconds = 0;
+              try { seekSeconds = player.getCurrentTime() || 0; } catch (err) {}
+              const song = window._currentSongs?.[index];
+              const rebuildName = song?.song_name || song?.ncm?.name || song?.song || song?.query || '';
+              const rebuildArtist = song?.artist || song?.ncm?.artist || '';
+              createYTPlayer(index, videoId, rebuildName, rebuildArtist, 0, seekSeconds);
+            }
+          } catch (err) {}
+        }, 1500);
       }
     } catch(e) {}
     return;
