@@ -774,6 +774,31 @@ window.onYouTubeIframeAPIReady = function() {
   ytApiReady = true;
 };
 
+// ── Native background audio bridge (Capacitor shell only; no-op on web/PWA) ─
+const isNativeApp = !!window.Capacitor;
+let bgAudioStopTimer = null;
+
+function bgAudioStart() {
+  if (!isNativeApp) return;
+  if (bgAudioStopTimer) { clearTimeout(bgAudioStopTimer); bgAudioStopTimer = null; }
+  window.Capacitor.Plugins.BackgroundAudio?.start().catch(e => mlog('BackgroundAudio.start failed:', e.message));
+}
+
+function bgAudioStopNow() {
+  if (!isNativeApp) return;
+  if (bgAudioStopTimer) { clearTimeout(bgAudioStopTimer); bgAudioStopTimer = null; }
+  window.Capacitor.Plugins.BackgroundAudio?.stop().catch(e => mlog('BackgroundAudio.stop failed:', e.message));
+}
+
+function bgAudioScheduleStop() {
+  if (!isNativeApp) return;
+  if (bgAudioStopTimer) clearTimeout(bgAudioStopTimer);
+  bgAudioStopTimer = setTimeout(() => {
+    bgAudioStopTimer = null;
+    bgAudioStopNow();
+  }, 60000);
+}
+
 // ── Queue ──────────────────────────────────────────────────────────────────
 let playQueue = [];
 let playQueueIndex = -1;
@@ -798,6 +823,7 @@ function resetPlayerState() {
   currentIframePaused = false;
   window._currentSongs = [];
   updateQueueButtons();
+  bgAudioStopNow();
 }
 
 function updateQueueButtons() {
@@ -816,6 +842,7 @@ function playFromQueue() {
     playQueue = [];
     playQueueIndex = -1;
     updateQueueButtons();
+    bgAudioStopNow();
     return;
   }
   const song = playQueue[playQueueIndex];
@@ -998,6 +1025,7 @@ function createYTPlayer(index, videoId, songName, artist, altIndex = 0) {
         const btn = document.getElementById('yt-btn-' + index);
         const indicator = document.getElementById('yt-indicator-' + index);
         if (e.data === YT.PlayerState.PLAYING) {
+          bgAudioStart();
           if (btn) btn.textContent = '⏸ Pause';
           if (indicator) indicator.style.display = 'none';
           const playedBtn = document.getElementById('played-btn-' + index);
@@ -1013,6 +1041,7 @@ function createYTPlayer(index, videoId, songName, artist, altIndex = 0) {
         if (e.data === YT.PlayerState.PAUSED) {
           if (btn) btn.textContent = '▶ Play';
           if (indicator) indicator.style.display = 'inline';
+          bgAudioScheduleStop();
         }
         if (e.data === YT.PlayerState.ENDED) {
           if (btn) btn.textContent = '▶ Play';
@@ -1020,6 +1049,8 @@ function createYTPlayer(index, videoId, songName, artist, altIndex = 0) {
           currentPlayingIndex = null;
           if (playQueueIndex === index) {
             setTimeout(() => { playQueueIndex++; playFromQueue(); }, 800);
+          } else {
+            bgAudioStopNow();
           }
         }
       },
