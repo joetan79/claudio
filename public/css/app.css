@@ -33,14 +33,13 @@ html, body {
   position: relative;
 }
 
-/* ── Top bar ── */
+/* ── Top bar ──
+   Sticky (not fixed) so it stays in normal document flow: its real rendered
+   height — including the safe-area padding below — pushes sibling content
+   down automatically. No hardcoded content padding needs to track it. */
 .topbar {
-  position: fixed;
+  position: sticky;
   top: 0;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 100%;
-  max-width: 600px;
   z-index: 100;
   background: var(--bg);
   border-bottom: 1px solid var(--border);
@@ -49,6 +48,7 @@ html, body {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-shrink: 0;
 }
 
 .topbar-title {
@@ -81,18 +81,16 @@ html, body {
 .btn-download-app svg { width: 20px; height: 20px; }
 .btn-download-app:hover { background: var(--accent-dim); }
 
-/* ── Bottom nav ── */
+/* ── Bottom nav ── same rationale as .topbar, plus bottom safe-area clearance. */
 .bottomnav {
-  position: fixed;
+  position: sticky;
   bottom: 0;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 100%;
-  max-width: 600px;
   z-index: 100;
   background: var(--bg);
   border-top: 1px solid var(--border);
   display: flex;
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  flex-shrink: 0;
 }
 
 .nav-btn {
@@ -113,14 +111,16 @@ html, body {
 .nav-btn.active { color: var(--accent); }
 .nav-btn:hover { color: var(--text); }
 
-/* ── Scrollable content area ── */
+/* ── Scrollable content area ──
+   Top/bottom bars are now in-flow (sticky), so this is just breathing-room
+   padding, not overlay clearance — no magic numbers to keep in sync. */
 .view {
   flex: 1;
-  padding: 72px 16px 80px;
+  padding: 16px;
   overflow-y: auto;
 }
 .view.auth-view {
-  padding-top: 72px;
+  padding-top: 16px;
   display: flex;
   flex-direction: column;
   justify-content: center;
