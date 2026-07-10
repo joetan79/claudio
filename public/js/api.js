@@ -73,4 +73,5 @@ const api = {
   getVoices() { return this.request('GET', '/api/profile/voices'); },
   saveVoice(voice) { return this.request('PUT', '/api/profile/voice', { voice }); },
   previewVoice(voice) { return this.request('POST', '/api/profile/voice/preview', { voice }); },
+  submitOnboarding(answers) { return this.request('POST', '/api/profile/onboarding', answers); },
 };

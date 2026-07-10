@@ -8,7 +8,7 @@ import { aiComplete } from './ai.js';
 import { getAiSettings } from './settings.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DATA_DIR = path.resolve(__dirname, '../../../data');
+const DATA_DIR = path.resolve(__dirname, '../../data');
 
 function readUserFile(uid, filename) {
   try {
@@ -264,6 +264,115 @@ say 示例："张学友最近几年出的东西你跟了吗？——挑了几首
     console.error('Failed to parse DJ decision:', text);
     return FALLBACK;
   }
+}
+
+// ── Onboarding profile generation ───────────────────────────────────────────
+const LANGUAGE_LABELS = {
+  mandarin: '华语/Mandarin',
+  cantonese: '粤语/Cantonese',
+  english: '英文/English',
+  japanese_korean: '日韩/Japanese & Korean',
+  mixed: '混着听/Mixed',
+};
+const SCENE_LABELS = {
+  commute: '通勤/Commute',
+  work_study: '工作学习/Work & Study',
+  workout: '健身/Workout',
+  chores: '做家务/Chores',
+  before_sleep: '睡前/Before sleep',
+  driving: '开车/Driving',
+};
+const SCHEDULE_LABELS = {
+  early_bird: '早起型/Early bird',
+  night_owl: '夜猫型/Night owl',
+  irregular: '不固定/Irregular',
+};
+const STYLE_LABELS = {
+  energetic: '热情活泼/Energetic & lively',
+  warm: '温柔治愈/Warm & soothing',
+  witty: '幽默毒舌/Humorous & sassy',
+  concise: '简洁专业/Concise & professional',
+};
+
+function mapLabels(map, values) {
+  const arr = Array.isArray(values) ? values : (values ? [values] : []);
+  const mapped = arr.filter(Boolean).map(v => map[v] || v);
+  return mapped.length ? mapped.join('、') : '(未选择)';
+}
+
+function parseOnboardingJSON(text) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    const match = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+    if (match) {
+      try { return JSON.parse(match[1]); } catch {}
+    }
+    return null;
+  }
+}
+
+export async function generateOnboardingProfile(uid, answers) {
+  const languages = mapLabels(LANGUAGE_LABELS, answers.languages);
+  const artists = (answers.artists || '').trim() || '(未提供)';
+  const scenarios = mapLabels(SCENE_LABELS, answers.scenarios);
+  const schedule = SCHEDULE_LABELS[answers.schedule] || answers.schedule || '(未选择)';
+  const style = STYLE_LABELS[answers.style] || answers.style || '(未选择)';
+
+  const prompt = `你是 Claudio 电台的档案生成助手。根据新用户的引导问答，生成两份 markdown 格式的用户档案文件。
+
+用户回答：
+1. 常听语言：${languages}
+2. 喜欢的歌手/乐队：${artists}
+3. 常听场景：${scenarios}
+4. 作息：${schedule}
+5. 想要的 DJ 风格：${style}
+
+请生成两份 markdown 内容：
+- taste.md：总结用户的语言偏好、喜欢的歌手/乐队、以及由此推断出的音乐风格偏好；结尾加一行"DJ 说话风格偏好：${style}"
+- routines.md：总结用户常听音乐的场景和大致作息
+
+两份文件都用简体中文撰写，格式参考：
+# My Taste
+
+（正文，用简短的段落或列表）
+
+只返回如下 JSON，不要有任何 JSON 之外的文字：
+{"taste": "...", "routines": "..."}`;
+
+  let taste, routines;
+  try {
+    const { provider, model, apiKey, ownKey } = getUserAiConfig(uid);
+    const aiResult = await aiComplete({
+      provider, model, apiKey,
+      messages: [{ role: 'user', content: prompt }],
+    });
+    recordUsage({
+      uid,
+      type: 'claude',
+      model: `${provider}/${model}`,
+      inputTokens: aiResult.usage.input_tokens,
+      outputTokens: aiResult.usage.output_tokens,
+      ownKey,
+    });
+    const parsed = parseOnboardingJSON(aiResult.text);
+    if (parsed?.taste && parsed?.routines) {
+      taste = parsed.taste;
+      routines = parsed.routines;
+    }
+  } catch (e) {
+    console.error('[onboarding] AI generation failed:', e.message);
+  }
+
+  if (!taste || !routines) {
+    taste = `# My Taste\n\n- 常听语言：${languages}\n- 喜欢的歌手/乐队：${artists}\n- DJ 说话风格偏好：${style}\n`;
+    routines = `# My Routines\n\n- 常听场景：${scenarios}\n- 作息：${schedule}\n`;
+  }
+
+  fs.writeFileSync(path.join(DATA_DIR, 'users', uid, 'taste.md'), taste, 'utf8');
+  fs.writeFileSync(path.join(DATA_DIR, 'users', uid, 'routines.md'), routines, 'utf8');
+
+  return { taste, routines };
 }
 
 export { getTimeOfDay };

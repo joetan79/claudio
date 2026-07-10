@@ -1,4 +1,4 @@
-const CACHE = 'claudio-v24';
+const CACHE = 'claudio-v26';
 const PRECACHE = ['/', '/css/app.css', '/js/i18n.js', '/js/api.js', '/js/app.js'];
 
 self.addEventListener('install', e => {

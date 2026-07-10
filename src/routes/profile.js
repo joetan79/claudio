@@ -3,10 +3,11 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { requireAuth } from '../middleware/auth.js';
-import { getSystemDb, getUserDb } from '../db/index.js';
+import { getSystemDb, getUserDb, DEFAULT_TASTE_MD } from '../db/index.js';
 import { encrypt, decrypt, isEncryptionEnabled, maskKey } from '../modules/crypto.js';
 import { getDjVoices, getUserVoiceId } from '../modules/settings.js';
 import { synthesize } from '../modules/tts.js';
+import { generateOnboardingProfile } from '../modules/claude.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.resolve(__dirname, '../../data');
@@ -156,7 +157,34 @@ router.get('/me', (req, res) => {
   ).get(req.user.uid);
 
   if (!user) return res.status(404).json({ error: 'User not found' });
-  res.json({ uid: user.id, username: user.username, email: user.email, created_at: user.created_at });
+
+  let needsOnboarding = true;
+  try {
+    const taste = fs.readFileSync(userFilePath(req.user.uid, 'taste.md'), 'utf8');
+    needsOnboarding = !taste.trim() || taste === DEFAULT_TASTE_MD;
+  } catch {
+    needsOnboarding = true;
+  }
+
+  res.json({
+    uid: user.id, username: user.username, email: user.email, created_at: user.created_at,
+    needs_onboarding: needsOnboarding,
+  });
+});
+
+router.post('/onboarding', async (req, res) => {
+  const { languages, artists, scenarios, schedule, style } = req.body ?? {};
+
+  const answers = {
+    languages: Array.isArray(languages) ? languages : (languages ? [languages] : []),
+    artists: typeof artists === 'string' ? artists.slice(0, 500) : '',
+    scenarios: Array.isArray(scenarios) ? scenarios : (scenarios ? [scenarios] : []),
+    schedule: typeof schedule === 'string' ? schedule : '',
+    style: typeof style === 'string' ? style : '',
+  };
+
+  const result = await generateOnboardingProfile(req.user.uid, answers);
+  res.json({ ok: true, taste: result.taste, routines: result.routines });
 });
 
 export default router;

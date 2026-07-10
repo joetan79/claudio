@@ -11,6 +11,9 @@ const DATA_DIR = path.resolve(__dirname, '../../data');
 let systemDb = null;
 const userDbs = new Map();
 
+export const DEFAULT_TASTE_MD = '# My Taste\n\n_Tell Claudio about your music taste here._\n';
+export const DEFAULT_ROUTINES_MD = '# My Routines\n\n_Describe your daily routines and when you listen to music._\n';
+
 export function getSystemDb() {
   if (systemDb) return systemDb;
 
@@ -130,14 +133,8 @@ export function initUserDir(uid) {
   db.close();
   userDbs.delete(uid);
 
-  fs.writeFileSync(
-    path.join(userDir, 'taste.md'),
-    '# My Taste\n\n_Tell Claudio about your music taste here._\n'
-  );
-  fs.writeFileSync(
-    path.join(userDir, 'routines.md'),
-    '# My Routines\n\n_Describe your daily routines and when you listen to music._\n'
-  );
+  fs.writeFileSync(path.join(userDir, 'taste.md'), DEFAULT_TASTE_MD);
+  fs.writeFileSync(path.join(userDir, 'routines.md'), DEFAULT_ROUTINES_MD);
 }
 
 export function getUserDb(uid) {

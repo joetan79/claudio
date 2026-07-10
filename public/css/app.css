@@ -299,12 +299,22 @@ html, body {
 }
 .btn-played:disabled { cursor: default; }
 
-/* ── Ask input ── */
+/* ── Ask input ── pinned above bottom nav, always visible on the player view */
+/* Pinned above .bottomnav (itself position:sticky;bottom:0) using a bottom
+   offset kept in sync with the bottomnav's actual rendered height — see the
+   --bottomnav-h write in syncNowPlayingUI(). The 73px fallback matches the
+   bottomnav's height before that first sync tick runs. */
 .ask-form {
   display: flex;
   gap: 10px;
-  margin-bottom: 20px;
   align-items: flex-end;
+  padding: 12px 16px;
+  margin-bottom: 0;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+  position: sticky;
+  bottom: var(--bottomnav-h, 73px);
+  z-index: 100;
 }
 .ask-input {
   flex: 1;
@@ -368,7 +378,6 @@ html, body {
   margin-top: 2px;
 }
 .btn-logout {
-  margin-top: 10px;
   background: none;
   border: 1px solid var(--border);
   color: var(--muted);
@@ -379,6 +388,18 @@ html, body {
   transition: border-color 0.15s, color 0.15s;
 }
 .btn-logout:hover { border-color: var(--danger); color: var(--danger); }
+
+.btn-redo-onboarding {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 0.8rem;
+  padding: 6px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+.btn-redo-onboarding:hover { border-color: var(--accent); color: var(--accent); }
 
 .profile-tabs {
   display: flex;
@@ -578,3 +599,325 @@ textarea.profile-textarea:focus { border-color: var(--accent); }
   transition: background 0.15s;
 }
 .btn-queue:hover { background: rgba(200,169,110,0.28); }
+
+/* ── Onboarding ── */
+.btn-skip-onboarding {
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 0.8rem;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+  transition: color 0.15s, background 0.15s;
+}
+.btn-skip-onboarding:hover { color: var(--text); background: var(--accent-dim); }
+
+.onboard-chat {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 8px 0 20px;
+}
+
+.onboard-msg {
+  display: flex;
+  gap: 10px;
+  max-width: 88%;
+  animation: obFadeIn 0.2s ease;
+}
+.onboard-msg.dj { align-self: flex-start; }
+.onboard-msg.user { align-self: flex-end; flex-direction: row-reverse; }
+
+.onboard-avatar {
+  flex-shrink: 0;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 0.85rem;
+}
+.onboard-msg.dj .onboard-avatar { background: var(--accent); color: var(--bg); }
+.onboard-msg.user .onboard-avatar { background: var(--surface2); color: var(--text); }
+
+.onboard-bubble {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px 14px;
+  font-size: 0.95rem;
+  line-height: 1.5;
+  word-break: break-word;
+}
+.onboard-msg.user .onboard-bubble { background: var(--accent-dim); border-color: var(--accent); }
+
+.onboard-typing .onboard-bubble {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  padding: 14px;
+}
+.onboard-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--muted);
+  animation: obBlink 1.2s infinite ease-in-out;
+}
+.onboard-dot:nth-child(2) { animation-delay: 0.2s; }
+.onboard-dot:nth-child(3) { animation-delay: 0.4s; }
+
+@keyframes obBlink {
+  0%, 80%, 100% { opacity: 0.3; }
+  40% { opacity: 1; }
+}
+@keyframes obFadeIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+
+.onboard-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding-top: 8px;
+}
+.onboard-option-btn {
+  flex: 1 1 auto;
+  min-width: 120px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: var(--radius-sm);
+  padding: 14px 12px;
+  font-size: 1rem;
+  cursor: pointer;
+  text-align: center;
+  transition: border-color 0.15s, background 0.15s, color 0.15s;
+}
+.onboard-option-btn:hover { border-color: var(--accent); }
+.onboard-option-btn.selected {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.onboard-confirm-row {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 12px;
+}
+
+.onboard-text-row {
+  display: flex;
+  gap: 10px;
+  padding-top: 8px;
+}
+.onboard-text-row input {
+  flex: 1;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  padding: 12px 14px;
+  font-size: 1rem;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.onboard-text-row input:focus { border-color: var(--accent); }
+
+/* ── Now Playing (immersive player, Phase 6B) ──
+   Visual/layout only — reuses the existing dj-card/songs-label/song-item/
+   btn-play-all markup untouched inside .now-playing-panel, and the existing
+   #audio-container element (still created/managed entirely by the Phase 5
+   YT.Player code) is only repositioned via inline style to visually overlay
+   .now-playing-video-slot's rect — never reparented, so playback continuity
+   across view switches is unaffected. */
+:root {
+  --np-region-height: 55vh;
+}
+
+.audio-container {
+  position: fixed;
+  top: -9999px;
+  left: -9999px;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 1;
+}
+.audio-container.audio-container-active {
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: #000;
+}
+.audio-container iframe { width: 100% !important; height: 100% !important; display: block; }
+
+/* #app sizes itself with min-height:100vh (not height:100vh), so nested flex
+   children can never get a definite height to internally clip/scroll against
+   — the whole app already relies on body-level scroll with topbar/bottomnav
+   pinned via position:sticky. The player view follows the same model: no
+   forced flex heights here, .now-playing-region simply occupies its min-height
+   share up front and scrolls away with the page, and .ask-form below pins
+   itself above .bottomnav via position:sticky (see its rule further down). */
+/* Base .view sets overflow-y:auto, which — even though it never actually
+   engages here (#app isn't height-constrained, so .view's box just grows to
+   fit its content) — still makes .view the nearest *scrolling ancestor* for
+   any position:sticky descendant, computed relative to .view's own (tall)
+   box instead of the real viewport. Cancel it so .ask-form's sticky bottom
+   resolves against the true document scroll, exactly like .bottomnav
+   (a sibling of .view, unaffected by this) already does. */
+.view.player-view { padding: 0; overflow: visible; }
+
+.player-columns {
+  display: flex;
+  flex-direction: column;
+}
+
+.now-playing-region {
+  min-height: var(--np-region-height);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 20px 16px;
+}
+
+.now-playing-visual {
+  width: 100%;
+  max-width: 360px;
+  aspect-ratio: 16 / 9;
+  border-radius: var(--radius);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  flex-shrink: 1;
+  min-height: 0;
+}
+
+.now-playing-video-slot { width: 100%; height: 100%; }
+
+.dj-orb {
+  width: 42%;
+  aspect-ratio: 1;
+  max-width: 140px;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.dj-orb-core {
+  width: 55%;
+  height: 55%;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, #e3c489, var(--accent) 60%, #8a6f3f);
+  box-shadow: 0 0 24px rgba(200, 169, 110, 0.35);
+  transition: box-shadow 0.3s ease;
+}
+.dj-orb-ring {
+  position: absolute;
+  inset: 15%;
+  border-radius: 50%;
+  border: 1px solid var(--accent);
+  opacity: 0;
+  animation: djPulse 2.6s ease-out infinite;
+}
+.dj-orb-ring:nth-child(2) { animation-delay: 1.3s; }
+.dj-orb.speaking .dj-orb-ring { animation-duration: 1.3s; }
+.dj-orb.speaking .dj-orb-core { box-shadow: 0 0 40px rgba(200, 169, 110, 0.6); }
+@keyframes djPulse {
+  0% { transform: scale(0.5); opacity: 0.6; }
+  100% { transform: scale(1.6); opacity: 0; }
+}
+
+.now-playing-title-block {
+  text-align: center;
+  max-width: 100%;
+  padding: 0 20px;
+}
+.now-playing-song {
+  font-size: 1.2rem;
+  font-weight: 700;
+  color: var(--text);
+  word-break: break-word;
+}
+.now-playing-artist {
+  font-size: 0.88rem;
+  color: var(--muted);
+  margin-top: 2px;
+}
+.np-fade-in { animation: npFadeIn 0.3s ease; }
+@keyframes npFadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
+
+.now-playing-controls {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 22px;
+}
+.np-ctrl-btn {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 50%;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.1s ease, border-color 0.15s, opacity 0.15s;
+}
+.np-ctrl-btn:active { transform: scale(0.9); }
+.np-ctrl-btn:disabled { opacity: 0.35; cursor: default; }
+.np-ctrl-prev, .np-ctrl-next { width: 44px; height: 44px; font-size: 0.7rem; letter-spacing: -2px; }
+.np-ctrl-playpause {
+  width: 64px;
+  height: 64px;
+  font-size: 1.4rem;
+  background: var(--accent);
+  color: #0a0a0a;
+  border-color: var(--accent);
+}
+.np-ctrl-playpause:active { transform: scale(0.92); }
+
+.now-playing-panel {
+  padding: 16px;
+  border-top: 1px solid var(--border);
+}
+
+/* queue row states — .song-item is the pre-existing class from renderSong() */
+.song-item.is-current {
+  border-left: 3px solid var(--accent);
+  padding-left: 9px;
+  margin-left: -12px;
+  background: var(--accent-dim);
+  border-radius: var(--radius-sm);
+}
+.song-item.is-played { opacity: 0.5; }
+
+@media (min-width: 768px) {
+  .player-columns { flex-direction: row; align-items: flex-start; }
+  .now-playing-region {
+    flex: 0 0 42%;
+    min-height: auto;
+    /* Row layout stretches the panel column to fit the tracklist, which can
+       run much taller than the viewport — pin the (shorter) video column so
+       it stays visible instead of centering somewhere off past the fold.
+       top offset kept in sync with the topbar's real height (env safe-area
+       makes it non-constant) via the --topbar-h write in syncNowPlayingUI(). */
+    position: sticky;
+    top: var(--topbar-h, 53px);
+  }
+  .now-playing-panel { flex: 1 1 58%; border-top: none; border-left: 1px solid var(--border); }
+}

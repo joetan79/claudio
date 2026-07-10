@@ -30,9 +30,18 @@ function mlog(...args) {
 // ── Audio ──────────────────────────────────────────────────────────────────
 let currentAudio = null;
 
+// Purely visual: toggles the DJ orb's "speaking" pulse to the TTS audio's
+// play/pause/ended state. Does not affect playback in any way.
+function attachDjOrbPulseHooks(audio) {
+  const toggle = on => document.getElementById('dj-orb')?.classList.toggle('speaking', on);
+  audio.addEventListener('play', () => toggle(true));
+  audio.addEventListener('pause', () => toggle(false));
+  audio.addEventListener('ended', () => toggle(false));
+}
+
 function playDJAudio(audioUrl) {
   if (!audioUrl) return;
-  if (!currentAudio) currentAudio = new Audio();
+  if (!currentAudio) { currentAudio = new Audio(); attachDjOrbPulseHooks(currentAudio); }
   currentAudio.src = audioUrl;
   currentAudio.load();
   currentAudio.play().catch(e => console.log('replay failed:', e.message));
@@ -43,7 +52,7 @@ window.playDJAudio = playDJAudio;
 // ── State ──────────────────────────────────────────────────────────────────
 const state = {
   user: null,
-  view: 'auth',       // 'auth' | 'player' | 'profile'
+  view: 'auth',       // 'auth' | 'player' | 'profile' | 'onboarding'
   authTab: 'login',   // 'login' | 'register'
   profileTab: 'taste', // 'taste' | 'routines' | 'history' | 'keys' | 'voice'
   nowPlaying: null,
@@ -54,7 +63,183 @@ const state = {
     keys: { key: null, provider: 'anthropic', model: '' },
     voices: { voices: [], current: null },
   },
+  onboarding: null,
 };
+
+// ── Onboarding ─────────────────────────────────────────────────────────────
+const ONBOARDING_FIRST_MESSAGE = '根据我的档案来一组见面礼歌单';
+
+const ONBOARDING_STEPS = [
+  {
+    key: 'languages',
+    type: 'multi',
+    questionKey: 'obQ1',
+    options: [
+      { value: 'mandarin', labelKey: 'obLangMandarin' },
+      { value: 'cantonese', labelKey: 'obLangCantonese' },
+      { value: 'english', labelKey: 'obLangEnglish' },
+      { value: 'japanese_korean', labelKey: 'obLangJpKr' },
+      { value: 'mixed', labelKey: 'obLangMixed' },
+    ],
+  },
+  {
+    key: 'artists',
+    type: 'text',
+    questionKey: 'obQ2',
+    placeholderKey: 'obQ2Placeholder',
+  },
+  {
+    key: 'scenarios',
+    type: 'multi',
+    questionKey: 'obQ3',
+    options: [
+      { value: 'commute', labelKey: 'obSceneCommute' },
+      { value: 'work_study', labelKey: 'obSceneWork' },
+      { value: 'workout', labelKey: 'obSceneWorkout' },
+      { value: 'chores', labelKey: 'obSceneChores' },
+      { value: 'before_sleep', labelKey: 'obSceneSleep' },
+      { value: 'driving', labelKey: 'obSceneDriving' },
+    ],
+  },
+  {
+    key: 'schedule',
+    type: 'single',
+    questionKey: 'obQ4',
+    options: [
+      { value: 'early_bird', labelKey: 'obSchedEarly' },
+      { value: 'night_owl', labelKey: 'obSchedNight' },
+      { value: 'irregular', labelKey: 'obSchedIrregular' },
+    ],
+  },
+  {
+    key: 'style',
+    type: 'single',
+    questionKey: 'obQ5',
+    options: [
+      { value: 'energetic', labelKey: 'obStyleEnergetic' },
+      { value: 'warm', labelKey: 'obStyleWarm' },
+      { value: 'witty', labelKey: 'obStyleWitty' },
+      { value: 'concise', labelKey: 'obStyleConcise' },
+    ],
+  },
+];
+
+const ONBOARDING_REPLY_KEYS = {
+  languages: 'obReplyLanguages',
+  artists: 'obReplyArtists',
+  scenarios: 'obReplyScenarios',
+  schedule: 'obReplySchedule',
+  style: 'obReplyStyle',
+};
+
+function findOnboardingOptionLabel(step, value) {
+  const opt = step.options.find(o => o.value === value);
+  return opt ? i18n.t(opt.labelKey) : value;
+}
+
+function formatOnboardAnswerText(step, answer) {
+  if (step.type === 'text') return answer || i18n.t('obSkippedAnswer');
+  const sep = i18n.current === 'zh' ? '、' : ', ';
+  if (step.type === 'single') return findOnboardingOptionLabel(step, answer);
+  return (answer || []).map(v => findOnboardingOptionLabel(step, v)).join(sep) || i18n.t('obSkippedAnswer');
+}
+
+function onboardReplyText(step, answer) {
+  if (step.key === 'artists' && !answer) return i18n.t('obReplyArtistsEmpty');
+  const sep = i18n.current === 'zh' ? '、' : ', ';
+  let v;
+  if (step.type === 'text') v = answer;
+  else if (step.type === 'single') v = findOnboardingOptionLabel(step, answer);
+  else v = (answer || []).map(val => findOnboardingOptionLabel(step, val)).join(sep);
+  return i18n.t(ONBOARDING_REPLY_KEYS[step.key]).replace('{v}', v);
+}
+
+function startOnboarding(returnView = 'player') {
+  state.view = 'onboarding';
+  state.onboarding = {
+    step: 0,
+    answers: { languages: [], artists: '', scenarios: [], schedule: '', style: '' },
+    messages: [],
+    typing: true,
+    returnView,
+  };
+  setTimeout(() => {
+    if (!state.onboarding) return;
+    state.onboarding.typing = false;
+    state.onboarding.messages.push({ who: 'dj', text: i18n.t('obWelcomeGreeting') });
+    state.onboarding.messages.push({ who: 'dj', text: i18n.t(ONBOARDING_STEPS[0].questionKey) });
+    render();
+    scrollOnboardChat();
+  }, 500);
+}
+
+async function submitOnboardingAnswer(stepKey, answer) {
+  const st = state.onboarding;
+  const step = ONBOARDING_STEPS.find(s => s.key === stepKey);
+  st.answers[stepKey] = answer;
+  st.messages.push({ who: 'user', text: formatOnboardAnswerText(step, answer) });
+  st.step++;
+  st.typing = true;
+  render();
+  scrollOnboardChat();
+
+  await new Promise(r => setTimeout(r, 500));
+  if (!state.onboarding) return;
+  st.typing = false;
+  st.messages.push({ who: 'dj', text: onboardReplyText(step, answer) });
+  if (st.step < ONBOARDING_STEPS.length) {
+    st.messages.push({ who: 'dj', text: i18n.t(ONBOARDING_STEPS[st.step].questionKey) });
+    render();
+    scrollOnboardChat();
+  } else {
+    render();
+    scrollOnboardChat();
+    await finalizeOnboarding();
+  }
+}
+
+async function finalizeOnboarding() {
+  const st = state.onboarding;
+  st.typing = true;
+  render();
+  scrollOnboardChat();
+  try {
+    await api.submitOnboarding(st.answers);
+  } catch (err) {
+    console.error(err);
+  }
+  if (!state.onboarding) return;
+  st.typing = false;
+  st.messages.push({ who: 'dj', text: i18n.t('obWelcomeDone') });
+  render();
+  scrollOnboardChat();
+
+  await new Promise(r => setTimeout(r, 900));
+  state.view = 'player';
+  state.onboarding = null;
+  render();
+  await runDecision(ONBOARDING_FIRST_MESSAGE);
+}
+
+function scrollOnboardChat() {
+  const el = document.querySelector('.onboarding-view');
+  if (el) el.scrollTop = el.scrollHeight;
+}
+
+async function routeAfterAuth() {
+  let needsOnboarding = false;
+  try {
+    const profile = await api.getProfile();
+    needsOnboarding = !!profile.needs_onboarding;
+  } catch { /* ignore — fall through to player */ }
+
+  if (needsOnboarding) {
+    startOnboarding('player');
+  } else {
+    state.view = 'player';
+    await loadNowPlaying();
+  }
+}
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 function esc(s) {
@@ -79,12 +264,125 @@ function render() {
   const root = document.getElementById('app');
   if (state.view === 'auth') {
     root.innerHTML = renderAuth();
+  } else if (state.view === 'onboarding') {
+    root.innerHTML = renderOnboarding();
   } else {
     root.innerHTML = renderShell();
     if (state.view === 'player') fillPlayer();
     else fillProfile();
   }
+  if (state.view === 'player') startNowPlayingSync();
+  else stopNowPlayingSync();
   attachEvents();
+}
+
+// ── Onboarding view ────────────────────────────────────────────────────────
+function renderOnboarding() {
+  const st = state.onboarding;
+  const msgsHtml = st.messages.map(renderOnboardMsg).join('');
+  const typingHtml = st.typing ? renderOnboardTyping() : '';
+  const current = ONBOARDING_STEPS[st.step];
+  const inputHtml = (!st.typing && current) ? renderOnboardInput(current, st) : '';
+  return `
+<div class="view onboarding-view">
+  <div class="topbar">
+    <span class="topbar-title">${esc(i18n.t('appName'))}</span>
+    <div style="display:flex;align-items:center;gap:12px">
+      <button class="btn-lang" id="btn-lang">${esc(i18n.t('langToggle'))}</button>
+      <button class="btn-skip-onboarding" id="btn-onboarding-skip">${esc(i18n.t('skip'))}</button>
+    </div>
+  </div>
+  <div class="onboard-chat" id="onboard-chat">
+    ${msgsHtml}
+    ${typingHtml}
+  </div>
+  ${inputHtml}
+</div>`;
+}
+
+function renderOnboardMsg(m) {
+  const avatarLetter = m.who === 'dj' ? 'C' : esc((state.user?.username || '?')[0]?.toUpperCase() || '?');
+  return `
+<div class="onboard-msg ${m.who}">
+  <div class="onboard-avatar">${avatarLetter}</div>
+  <div class="onboard-bubble">${esc(m.text)}</div>
+</div>`;
+}
+
+function renderOnboardTyping() {
+  return `
+<div class="onboard-msg dj onboard-typing">
+  <div class="onboard-avatar">C</div>
+  <div class="onboard-bubble"><span class="onboard-dot"></span><span class="onboard-dot"></span><span class="onboard-dot"></span></div>
+</div>`;
+}
+
+function renderOnboardInput(step, st) {
+  if (step.type === 'text') {
+    return `
+<div class="onboard-text-row">
+  <input type="text" id="onboard-text-input" placeholder="${esc(i18n.t(step.placeholderKey))}" autocomplete="off" />
+  <button class="btn-ask" id="onboard-text-submit">${esc(i18n.t('obSend'))}</button>
+</div>`;
+  }
+  const selected = st.answers[step.key];
+  const isMulti = step.type === 'multi';
+  const optsHtml = step.options.map(opt => {
+    const isSel = isMulti ? selected.includes(opt.value) : selected === opt.value;
+    return `<button class="onboard-option-btn ${isSel ? 'selected' : ''}" data-value="${esc(opt.value)}">${esc(i18n.t(opt.labelKey))}</button>`;
+  }).join('');
+  const confirmHtml = isMulti
+    ? `<div class="onboard-confirm-row"><button class="btn-ask" id="onboard-multi-confirm" ${selected.length ? '' : 'disabled'}>${esc(i18n.t('obNext'))}</button></div>`
+    : '';
+  return `<div class="onboard-options">${optsHtml}</div>${confirmHtml}`;
+}
+
+function attachOnboardingEvents() {
+  document.getElementById('btn-onboarding-skip')?.addEventListener('click', async () => {
+    const target = state.onboarding?.returnView || 'player';
+    state.onboarding = null;
+    state.view = target;
+    if (target === 'player' && !state.nowPlaying) await loadNowPlaying();
+    render();
+  });
+
+  const st = state.onboarding;
+  const step = ONBOARDING_STEPS[st?.step];
+  if (!step || st.typing) return;
+
+  if (step.type === 'text') {
+    const input = document.getElementById('onboard-text-input');
+    const submit = document.getElementById('onboard-text-submit');
+    const doSubmit = () => {
+      const val = input?.value.trim() || '';
+      submitOnboardingAnswer(step.key, val);
+    };
+    submit?.addEventListener('click', doSubmit);
+    input?.addEventListener('keydown', e => {
+      if (e.key === 'Enter') { e.preventDefault(); doSubmit(); }
+    });
+    input?.focus();
+    return;
+  }
+
+  document.querySelectorAll('.onboard-option-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const value = btn.dataset.value;
+      if (step.type === 'single') {
+        submitOnboardingAnswer(step.key, value);
+      } else {
+        const arr = st.answers[step.key];
+        const idx = arr.indexOf(value);
+        if (idx >= 0) arr.splice(idx, 1); else arr.push(value);
+        render();
+        scrollOnboardChat();
+      }
+    });
+  });
+
+  document.getElementById('onboard-multi-confirm')?.addEventListener('click', () => {
+    submitOnboardingAnswer(step.key, st.answers[step.key]);
+  });
 }
 
 // ── Shell (topbar + bottomnav + view slot) ─────────────────────────────────
@@ -181,14 +479,20 @@ function renderRegisterForm() {
 // ── Player view ────────────────────────────────────────────────────────────
 function fillPlayer() {
   window._currentSongs = (state.nowPlaying?.play || []).filter(s => s.yt?.videoId);
-  document.getElementById('view-content').innerHTML = renderPlayerContent();
+  const viewEl = document.getElementById('view-content');
+  viewEl.classList.add('player-view');
+  viewEl.innerHTML = renderPlayerContent();
   restorePlayerButtons();
+  syncNowPlayingUI();
   if (isIOS && !localStorage.getItem('ios_hint_shown')) {
     const djCard = document.querySelector('.dj-card');
     if (djCard) djCard.insertAdjacentHTML('afterend', `<div id="ios-hint" style="background:#c8a96e22;border:1px solid #c8a96e;border-radius:8px;padding:10px 14px;margin:8px 0;color:#c8a96e;font-size:13px;display:flex;justify-content:space-between;align-items:center;"><span>💡 iOS tip: tap Play twice to start a song</span><button onclick="document.getElementById('ios-hint').remove();localStorage.setItem('ios_hint_shown','1')" style="background:none;border:none;color:#c8a96e;font-size:18px;cursor:pointer">×</button></div>`);
   }
 }
 
+// Now Playing region (video slot / DJ orb / title / transport controls) sits
+// above a scrollable panel that reuses the exact same dj-card/songs-label/
+// btn-play-all/renderSong markup as before — only its container moved.
 function renderPlayerContent() {
   const np = state.nowPlaying;
   const djBlock = np
@@ -214,6 +518,31 @@ function renderPlayerContent() {
       </div>`;
 
   return `
+<div class="player-columns">
+  <div class="now-playing-region">
+    <div class="now-playing-visual" id="now-playing-visual">
+      <div class="now-playing-video-slot" id="now-playing-video-slot"></div>
+      <div class="dj-orb" id="dj-orb">
+        <div class="dj-orb-ring"></div>
+        <div class="dj-orb-ring"></div>
+        <div class="dj-orb-core"></div>
+      </div>
+    </div>
+    <div class="now-playing-title-block">
+      <div class="now-playing-song" id="now-playing-song">${esc(i18n.t('noSongPlaying'))}</div>
+      <div class="now-playing-artist" id="now-playing-artist"></div>
+    </div>
+    <div class="now-playing-controls">
+      <button class="np-ctrl-btn np-ctrl-prev" id="np-btn-prev" disabled>◀◀</button>
+      <button class="np-ctrl-btn np-ctrl-playpause" id="np-btn-playpause">▶</button>
+      <button class="np-ctrl-btn np-ctrl-next" id="np-btn-next" disabled>▶▶</button>
+    </div>
+  </div>
+  <div class="now-playing-panel" id="now-playing-panel">
+    ${state.error ? `<div class="dj-error">${esc(state.error)}</div>` : ''}
+    ${state.loading ? `<div class="loading-text">${esc(i18n.t('loading'))}</div>` : djBlock}
+  </div>
+</div>
 <div class="ask-form">
   <textarea class="ask-input" id="ask-input" rows="1"
     placeholder="${esc(i18n.t('inputPlaceholder'))}"
@@ -221,9 +550,7 @@ function renderPlayerContent() {
   <button class="btn-ask" id="btn-ask" ${state.loading ? 'disabled' : ''}>
     ${state.loading ? esc(i18n.t('loading')) : esc(i18n.t('send'))}
   </button>
-</div>
-${state.error ? `<div class="dj-error">${esc(state.error)}</div>` : ''}
-${state.loading ? `<div class="loading-text">${esc(i18n.t('loading'))}</div>` : djBlock}`;
+</div>`;
 }
 
 function renderSong(s, idx) {
@@ -275,7 +602,10 @@ function renderProfileContent() {
 <div class="profile-header">
   <div class="profile-username">${esc(u.username || '')}</div>
   <div class="profile-email">${esc(u.email || '')}</div>
-  <button class="btn-logout" id="btn-logout">${esc(i18n.t('logout'))}</button>
+  <div style="display:flex;gap:8px;justify-content:center;margin-top:10px">
+    <button class="btn-redo-onboarding" id="btn-redo-onboarding">${esc(i18n.t('redoOnboarding'))}</button>
+    <button class="btn-logout" id="btn-logout">${esc(i18n.t('logout'))}</button>
+  </div>
 </div>
 <div class="profile-tabs">
   <button class="profile-tab ${state.profileTab === 'taste' ? 'active' : ''}" data-tab="taste">${esc(i18n.t('taste'))}</button>
@@ -398,6 +728,8 @@ function attachEvents() {
 
   if (state.view === 'auth') {
     attachAuthEvents();
+  } else if (state.view === 'onboarding') {
+    attachOnboardingEvents();
   } else {
     // Nav
     document.getElementById('nav-player')?.addEventListener('click', () => {
@@ -442,8 +774,7 @@ function attachAuthEvents() {
       const data = await api.login(email, password);
       api.setToken(data.token);
       state.user = { uid: data.uid, username: data.username };
-      state.view = 'player';
-      await loadNowPlaying();
+      await routeAfterAuth();
       render();
     } catch (err) {
       showError(errEl, err.message || i18n.t('errorServer'));
@@ -471,8 +802,7 @@ function attachAuthEvents() {
       const data = await api.login(email, password);
       api.setToken(data.token);
       state.user = { uid: data.uid, username: data.username };
-      state.view = 'player';
-      await loadNowPlaying();
+      await routeAfterAuth();
       render();
     } catch (err) {
       showError(errEl, err.message || i18n.t('errorServer'));
@@ -501,45 +831,64 @@ function attachPlayerEvents() {
 
   btn?.addEventListener('click', async () => {
     const msg = input?.value.trim() || '';
-    if (state.loading) return;
-
-    // Unlock audio in the synchronous click stack — must happen before any await
-    if (!currentAudio) {
-      currentAudio = new Audio();
-      currentAudio.src = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=';
-      currentAudio.play().catch(() => {});
-    }
-
-    state.loading = true;
-    state.error = null;
-    fillPlayer();
-    attachPlayerEvents();
-    try {
-      const decision = await api.decide(msg);
-      if (decision.play?.some(s => !s.yt?.videoId)) {
-        decision.play = await ensureVideoIds(decision.play, decision.mood);
-      }
-      state.nowPlaying = decision;
-      if (input) input.value = '';
-    } catch (err) {
-      console.error(err);
-      if (err.code === 'OWN_KEY_INVALID') state.error = i18n.t('ownKeyInvalid');
-      else if (err.code === 'AI_KEY_REQUIRED') state.error = i18n.t('aiKeyRequired');
-      else state.error = err.message || i18n.t('errorServer');
-    } finally {
-      state.loading = false;
-      resetPlayerState();
-      fillPlayer();
-      attachPlayerEvents();
-      // Play on the already-unlocked Audio object
-      if (state.nowPlaying?.audioUrl && currentAudio) {
-        currentAudio.src = state.nowPlaying.audioUrl;
-        currentAudio.load();
-        currentAudio.play().catch(e => console.log('play failed:', e.message));
-      }
-    }
+    await runDecision(msg, { onSuccessClearInput: input });
   });
 
+  // Now Playing transport controls — call straight into the existing,
+  // untouched playAll/toggleYT/playNext/playPrevious functions.
+  document.getElementById('np-btn-playpause')?.addEventListener('click', handleNowPlayingPlayPause);
+  document.getElementById('np-btn-prev')?.addEventListener('click', () => window.playPrevious());
+  document.getElementById('np-btn-next')?.addEventListener('click', () => window.playNext());
+
+  // Queue row click = jump-play. Delegates to the row's own existing Play
+  // button (already wired to toggleYT) rather than duplicating its logic.
+  document.querySelectorAll('.song-item').forEach(row => {
+    row.addEventListener('click', e => {
+      if (e.target.closest('.btn-yt-play, .btn-played')) return;
+      row.querySelector('.btn-yt-play')?.click();
+    });
+  });
+}
+
+async function runDecision(message, { onSuccessClearInput } = {}) {
+  if (state.loading) return;
+
+  // Unlock audio in the synchronous click stack — must happen before any await
+  if (!currentAudio) {
+    currentAudio = new Audio();
+    attachDjOrbPulseHooks(currentAudio);
+    currentAudio.src = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=';
+    currentAudio.play().catch(() => {});
+  }
+
+  state.loading = true;
+  state.error = null;
+  fillPlayer();
+  attachPlayerEvents();
+  try {
+    const decision = await api.decide(message);
+    if (decision.play?.some(s => !s.yt?.videoId)) {
+      decision.play = await ensureVideoIds(decision.play, decision.mood);
+    }
+    state.nowPlaying = decision;
+    if (onSuccessClearInput) onSuccessClearInput.value = '';
+  } catch (err) {
+    console.error(err);
+    if (err.code === 'OWN_KEY_INVALID') state.error = i18n.t('ownKeyInvalid');
+    else if (err.code === 'AI_KEY_REQUIRED') state.error = i18n.t('aiKeyRequired');
+    else state.error = err.message || i18n.t('errorServer');
+  } finally {
+    state.loading = false;
+    resetPlayerState();
+    fillPlayer();
+    attachPlayerEvents();
+    // Play on the already-unlocked Audio object
+    if (state.nowPlaying?.audioUrl && currentAudio) {
+      currentAudio.src = state.nowPlaying.audioUrl;
+      currentAudio.load();
+      currentAudio.play().catch(e => console.log('play failed:', e.message));
+    }
+  }
 }
 
 function attachProfileEvents() {
@@ -550,6 +899,12 @@ function attachProfileEvents() {
     state.nowPlaying = null;
     state.view = 'auth';
     state.authTab = 'login';
+    render();
+  });
+
+  document.getElementById('btn-redo-onboarding')?.addEventListener('click', () => {
+    if (!confirm(i18n.t('redoOnboardingConfirm'))) return;
+    startOnboarding('profile');
     render();
   });
 
@@ -912,6 +1267,162 @@ window.playNext = function() {
   playFromQueue();
 };
 
+// Mirrors playNext() above (same queue primitives, decrementing instead of
+// incrementing) — added for the Now Playing transport's Prev button.
+window.playPrevious = function() {
+  if (playQueue.length === 0) {
+    console.log('[Prev] No queue active');
+    return;
+  }
+  if (playQueueIndex <= 0) {
+    console.log('[Prev] Already at first track');
+    return;
+  }
+  console.log('[Prev] Current index:', playQueueIndex, '→', playQueueIndex - 1);
+  if (currentPlayingIndex !== null && ytPlayers[currentPlayingIndex]) {
+    try { ytPlayers[currentPlayingIndex].destroy(); } catch(e) {}
+    delete ytPlayers[currentPlayingIndex];
+    const oldBtn = document.getElementById('yt-btn-' + currentPlayingIndex);
+    if (oldBtn) oldBtn.textContent = '▶ Play';
+    currentPlayingIndex = null;
+  }
+  playQueueIndex--;
+  playFromQueue();
+};
+
+// ── Now Playing sync (Phase 6B, visual layer only) ──────────────────────────
+// Polls the existing, untouched queue/player globals (currentPlayingIndex,
+// ytPlayers, playQueue, playQueueIndex) and reflects them onto the new Now
+// Playing region. Never calls into or mutates YT.Player/queue internals —
+// read-only against that layer. The one exception is repositioning the
+// pre-existing #audio-container element via inline style to visually overlay
+// .now-playing-video-slot's rect; the element itself is never reparented or
+// recreated, so playback continuity across view switches is unaffected.
+let nowPlayingSyncTimer = null;
+let lastNpTitleKey = null;
+
+function startNowPlayingSync() {
+  if (nowPlayingSyncTimer) return;
+  syncNowPlayingUI();
+  nowPlayingSyncTimer = setInterval(syncNowPlayingUI, 400);
+}
+
+function stopNowPlayingSync() {
+  if (nowPlayingSyncTimer) {
+    clearInterval(nowPlayingSyncTimer);
+    nowPlayingSyncTimer = null;
+  }
+  positionAudioContainerOffscreen();
+}
+
+function positionAudioContainerOffscreen() {
+  const el = document.getElementById('audio-container');
+  if (!el) return;
+  el.classList.remove('audio-container-active');
+  el.style.position = 'fixed';
+  el.style.top = '-9999px';
+  el.style.left = '-9999px';
+  el.style.width = '1px';
+  el.style.height = '1px';
+}
+
+function updateNowPlayingTitle(song) {
+  const titleEl = document.getElementById('now-playing-song');
+  const artistEl = document.getElementById('now-playing-artist');
+  if (!titleEl || !artistEl) return;
+  const name = song?.song_name || song?.ncm?.name || song?.song || song?.query || '';
+  const artist = song?.artist || song?.ncm?.artist || '';
+  const key = name + '|' + artist;
+  if (key === lastNpTitleKey) return;
+  lastNpTitleKey = key;
+  titleEl.textContent = name || i18n.t('noSongPlaying');
+  artistEl.textContent = artist;
+  [titleEl, artistEl].forEach(el => {
+    el.classList.remove('np-fade-in');
+    void el.offsetWidth; // restart the animation
+    el.classList.add('np-fade-in');
+  });
+}
+
+function syncNowPlayingUI() {
+  if (state.view !== 'player') return;
+
+  // Keeps .ask-form's sticky bottom offset (--bottomnav-h) and the desktop
+  // now-playing-region's sticky top offset (--topbar-h) matched to those
+  // bars' actual rendered heights (both vary with safe-area insets).
+  const bottomnav = document.querySelector('.bottomnav');
+  if (bottomnav) {
+    document.documentElement.style.setProperty('--bottomnav-h', bottomnav.getBoundingClientRect().height + 'px');
+  }
+  const topbar = document.querySelector('.topbar');
+  if (topbar) {
+    document.documentElement.style.setProperty('--topbar-h', topbar.getBoundingClientRect().height + 'px');
+  }
+
+  const slot = document.getElementById('now-playing-video-slot');
+  const orb = document.getElementById('dj-orb');
+  const audioEl = document.getElementById('audio-container');
+  const hasActiveVideo = currentPlayingIndex !== null && !!ytPlayers[currentPlayingIndex];
+
+  if (slot && orb && audioEl) {
+    if (hasActiveVideo) {
+      const rect = slot.getBoundingClientRect();
+      if (rect.width > 0 && rect.height > 0) {
+        audioEl.classList.add('audio-container-active');
+        audioEl.style.position = 'fixed';
+        audioEl.style.top = rect.top + 'px';
+        audioEl.style.left = rect.left + 'px';
+        audioEl.style.width = rect.width + 'px';
+        audioEl.style.height = rect.height + 'px';
+      }
+      slot.style.display = '';
+      orb.style.display = 'none';
+    } else {
+      positionAudioContainerOffscreen();
+      slot.style.display = 'none';
+      orb.style.display = '';
+    }
+  }
+
+  const songs = state.nowPlaying?.play || [];
+  const activeIdx = currentPlayingIndex !== null ? currentPlayingIndex : (playQueueIndex >= 0 ? playQueueIndex : null);
+  updateNowPlayingTitle(activeIdx !== null ? songs[activeIdx] : null);
+
+  const btnPlayPause = document.getElementById('np-btn-playpause');
+  const btnPrev = document.getElementById('np-btn-prev');
+  const btnNext = document.getElementById('np-btn-next');
+  if (btnPlayPause) {
+    let playing = false;
+    if (hasActiveVideo) {
+      try { playing = ytApiReady && ytPlayers[currentPlayingIndex].getPlayerState() === YT.PlayerState.PLAYING; } catch (e) {}
+    }
+    btnPlayPause.textContent = playing ? '⏸' : '▶';
+  }
+  if (btnPrev) btnPrev.disabled = !(playQueue.length > 0 && playQueueIndex > 0);
+  if (btnNext) btnNext.disabled = !(playQueue.length > 0 && playQueueIndex < playQueue.length - 1);
+
+  document.querySelectorAll('.song-item').forEach(row => {
+    const playBtn = row.querySelector('.btn-yt-play');
+    const rowIdx = playBtn ? parseInt((playBtn.id || '').replace('yt-btn-', ''), 10) : NaN;
+    if (Number.isNaN(rowIdx)) return;
+    row.classList.toggle('is-current', rowIdx === currentPlayingIndex);
+    const playedBtn = document.getElementById('played-btn-' + rowIdx);
+    row.classList.toggle('is-played', !!playedBtn?.disabled && rowIdx !== currentPlayingIndex);
+  });
+}
+
+// Central Play/Pause: toggles the active song if one is loaded, otherwise
+// starts the queue from the top — both via the existing, untouched functions.
+function handleNowPlayingPlayPause() {
+  if (currentPlayingIndex !== null && ytPlayers[currentPlayingIndex]) {
+    const song = (state.nowPlaying?.play || [])[currentPlayingIndex];
+    const videoId = song?.yt?.videoId;
+    if (videoId) window.toggleYT(currentPlayingIndex, videoId);
+  } else {
+    window.playAll();
+  }
+}
+
 // ── MediaSession ───────────────────────────────────────────────────────────
 function updateMediaSession(title, artist) {
   if (!('mediaSession' in navigator)) return;
@@ -1156,8 +1667,7 @@ async function boot() {
     try {
       const me = await api.me();
       state.user = { uid: me.uid, username: me.username, email: me.email };
-      state.view = 'player';
-      await loadNowPlaying();
+      await routeAfterAuth();
     } catch {
       api.clearToken();
       state.view = 'auth';
