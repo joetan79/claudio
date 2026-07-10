@@ -10,6 +10,47 @@ const DATA_API_TIMEOUT_MS = 4000;
 const DATA_API_BATCH_SIZE = 50;
 const YOUTUBE_API_KEY = process.env.YOUTUBE_API_KEY;
 
+// Anti-pollution filters for the normal-search and ytsr fallback tiers only —
+// YT Music's `type: song` results are already clean and skip these.
+const MIN_FALLBACK_DURATION_SEC = 90;
+const MAX_FALLBACK_DURATION_SEC = 600;
+const BLOCKED_FALLBACK_TITLE = /gameplay|实况|攻略|直播|教程|tutorial|reaction|合集|串烧|mix|全集|8d|倍速|sped\s*up|slowed/i;
+
+function parseDurationToSeconds(text) {
+  if (!text) return null;
+  const parts = text.split(':').map(n => parseInt(n, 10));
+  if (!parts.length || parts.some(Number.isNaN)) return null;
+  return parts.reduce((acc, p) => acc * 60 + p, 0);
+}
+
+function normalizeForMatch(s) {
+  return (s || '').toLowerCase();
+}
+
+function extractTokens(query) {
+  return (query || '')
+    .split(/\s+/)
+    .map(t => t.replace(/[^\p{L}\p{N}]/gu, ''))
+    .filter(t => t.length >= 2);
+}
+
+// Simple includes-based relevance check: the title must contain at least one
+// meaningful token from the song/artist query (case-insensitive for Latin script,
+// direct match for CJK since case doesn't apply there).
+function titleMatchesQuery(title, query) {
+  const tokens = extractTokens(query);
+  if (!tokens.length) return true;
+  const normTitle = normalizeForMatch(title);
+  return tokens.some(tok => normTitle.includes(normalizeForMatch(tok)));
+}
+
+function passesFallbackFilters(title, durationSeconds, query) {
+  if (durationSeconds == null || durationSeconds < MIN_FALLBACK_DURATION_SEC || durationSeconds > MAX_FALLBACK_DURATION_SEC) return false;
+  if (BLOCKED_FALLBACK_TITLE.test(title)) return false;
+  if (!titleMatchesQuery(title, query)) return false;
+  return true;
+}
+
 let innertubePromise = null;
 function getInnertube() {
   if (!innertubePromise) innertubePromise = Innertube.create();
@@ -126,32 +167,34 @@ export async function searchYTMusic(query) {
   return candidates;
 }
 
-async function searchVideosInnertube(yt, q) {
+async function searchVideosInnertube(yt, q, originalQuery) {
   const search = await yt.search(q, { type: 'video' });
   return search.results
     .filterType(YTNodes.Video)
     .filter(v => !v.is_live)
+    .filter(v => passesFallbackFilters(v.title?.text || '', v.duration?.seconds ?? null, originalQuery))
     .map(v => ({ videoId: v.video_id, title: v.title?.text || '', channel: v.author?.name || '' }));
 }
 
 async function searchYouTubeInnertube(query) {
   const yt = await getInnertube();
-  let videos = await searchVideosInnertube(yt, `${query} official audio`);
-  if (!videos.length) videos = await searchVideosInnertube(yt, `${query} audio`);
+  let videos = await searchVideosInnertube(yt, `${query} official audio`, query);
+  if (!videos.length) videos = await searchVideosInnertube(yt, `${query} audio`, query);
   if (!videos.length) return [];
   return orderByPreference(videos).slice(0, MAX_CANDIDATES).map(v => ({ ...v, source: 'search' }));
 }
 
-async function searchVideosYtsr(q) {
+async function searchVideosYtsr(q, originalQuery) {
   const results = await ytsr(q, { limit: 5 });
   return results.items
     .filter(i => i.type === 'video' && !i.isLive)
+    .filter(i => passesFallbackFilters(i.title, parseDurationToSeconds(i.duration), originalQuery))
     .map(i => ({ videoId: i.id, title: i.title, channel: i.author?.name || '' }));
 }
 
 async function searchYouTubeYtsr(query) {
-  let videos = await searchVideosYtsr(`${query} official audio`);
-  if (!videos.length) videos = await searchVideosYtsr(`${query} audio`);
+  let videos = await searchVideosYtsr(`${query} official audio`, query);
+  if (!videos.length) videos = await searchVideosYtsr(`${query} audio`, query);
   if (!videos.length) return null;
   const best = pickBest(videos);
   return { ...best, source: 'ytsr', altIds: [best.videoId] };

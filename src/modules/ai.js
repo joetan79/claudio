@@ -1,7 +1,7 @@
 async function callAnthropic({ apiKey, model, system, messages }) {
   const body = JSON.stringify({
     model,
-    max_tokens: 1024,
+    max_tokens: 4096,
     ...(system ? { system } : {}),
     messages,
   });
@@ -32,8 +32,9 @@ async function callAnthropic({ apiKey, model, system, messages }) {
   }
 
   const data = await response.json();
+  const textBlock = data.content?.find(b => b.type === 'text');
   return {
-    text: data.content?.[0]?.text ?? '',
+    text: textBlock?.text ?? '',
     usage: {
       input_tokens: data.usage?.input_tokens ?? 0,
       output_tokens: data.usage?.output_tokens ?? 0,
@@ -50,7 +51,7 @@ async function callOpenRouter({ apiKey, model, system, messages }) {
       'Authorization': `Bearer ${apiKey}`,
       'content-type': 'application/json',
     },
-    body: JSON.stringify({ model, messages: orMessages }),
+    body: JSON.stringify({ model, messages: orMessages, max_tokens: 4096 }),
   });
 
   if (!response.ok) {
