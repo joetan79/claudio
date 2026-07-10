@@ -299,22 +299,19 @@ html, body {
 }
 .btn-played:disabled { cursor: default; }
 
-/* ── Ask input ── pinned above bottom nav, always visible on the player view */
-/* Pinned above .bottomnav (itself position:sticky;bottom:0) using a bottom
-   offset kept in sync with the bottomnav's actual rendered height — see the
-   --bottomnav-h write in syncNowPlayingUI(). The 73px fallback matches the
-   bottomnav's height before that first sync tick runs. */
+/* ── Ask input ── always visible above bottom nav on the player view.
+   .view.player-view is a bounded flex column (see #app.app--player-shell
+   above) and this is its last child, so it just naturally sits at the
+   bottom — no position:sticky/fixed needed. */
 .ask-form {
   display: flex;
   gap: 10px;
   align-items: flex-end;
+  flex: 0 0 auto;
   padding: 12px 16px;
   margin-bottom: 0;
   border-top: 1px solid var(--border);
   background: var(--bg);
-  position: sticky;
-  bottom: var(--bottomnav-h, 73px);
-  z-index: 100;
 }
 .ask-input {
   flex: 1;
@@ -729,17 +726,21 @@ textarea.profile-textarea:focus { border-color: var(--accent); }
 }
 .onboard-text-row input:focus { border-color: var(--accent); }
 
-/* ── Now Playing (immersive player, Phase 6B) ──
+/* ── Now Playing (immersive player, Phase 6B/6C, redone in 6C-fix) ──
    Visual/layout only — reuses the existing dj-card/songs-label/song-item/
    btn-play-all markup untouched inside .now-playing-panel, and the existing
    #audio-container element (still created/managed entirely by the Phase 5
    YT.Player code) is only repositioned via inline style to visually overlay
    .now-playing-video-slot's rect — never reparented, so playback continuity
-   across view switches is unaffected. */
-:root {
-  --np-region-height: 55vh;
-}
+   across view switches is unaffected.
 
+   6C-fix replaces the mini-window-in-the-corner collapse with: Now Playing
+   pinned as a non-scrolling flex sibling above an independently-scrolling
+   panel (overflow-y:auto), on both mobile and desktop. This requires #app to
+   have a *definite* height while on the player view (toggled via the
+   app--player-shell class in render()) — flex-basis/flex-grow can't produce
+   a bounded, scrollable child from an unbounded (min-height:100vh) ancestor.
+   Other views are untouched and keep relying on body-level scroll. */
 .audio-container {
   position: fixed;
   top: -9999px;
@@ -757,50 +758,54 @@ textarea.profile-textarea:focus { border-color: var(--accent); }
 }
 .audio-container iframe { width: 100% !important; height: 100% !important; display: block; }
 
-/* #app sizes itself with min-height:100vh (not height:100vh), so nested flex
-   children can never get a definite height to internally clip/scroll against
-   — the whole app already relies on body-level scroll with topbar/bottomnav
-   pinned via position:sticky. The player view follows the same model: no
-   forced flex heights here, .now-playing-region simply occupies its min-height
-   share up front and scrolls away with the page, and .ask-form below pins
-   itself above .bottomnav via position:sticky (see its rule further down). */
-/* Base .view sets overflow-y:auto, which — even though it never actually
-   engages here (#app isn't height-constrained, so .view's box just grows to
-   fit its content) — still makes .view the nearest *scrolling ancestor* for
-   any position:sticky descendant, computed relative to .view's own (tall)
-   box instead of the real viewport. Cancel it so .ask-form's sticky bottom
-   resolves against the true document scroll, exactly like .bottomnav
-   (a sibling of .view, unaffected by this) already does. */
-.view.player-view { padding: 0; overflow: visible; }
+#app.app--player-shell {
+  height: 100vh;
+  height: 100dvh; /* progressive enhancement: accounts for mobile browser chrome */
+  overflow: hidden;
+}
+
+.view.player-view {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  flex: 1 1 auto;
+  min-height: 0; /* lets this flex child shrink below content size — required for the internal scroll below to ever engage */
+  overflow: hidden;
+}
 
 .player-columns {
   display: flex;
   flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
 }
 
+/* flex:0 0 auto — sized to its own content only, never stretched/shrunk by
+   the flex algorithm, so it stays put while .now-playing-panel scrolls next
+   to it. This — not position:sticky/fixed — is what keeps it "pinned": it
+   simply isn't part of the scrolling element. */
 .now-playing-region {
-  min-height: var(--np-region-height);
+  flex: 0 0 auto;
+  position: relative; /* anchors the corner collapse button */
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: 14px;
   padding: 20px 16px;
-  transition: min-height 0.3s ease, padding 0.3s ease;
+  transition: padding 0.3s ease, gap 0.3s ease;
 }
-/* Collapsed: the region itself shrinks to a thin strip (the video becomes a
-   fixed-position mini-window via .now-playing-visual--mini below, so it takes
-   no in-flow space at all) — dj-card/queue naturally flow up to fill the gap. */
 .now-playing-region.collapsed {
-  min-height: 0;
-  padding-top: 8px;
-  padding-bottom: 8px;
+  gap: 0;
+  padding: 0 16px;
 }
 
 .now-playing-visual {
   width: 100%;
   max-width: 360px;
   aspect-ratio: 16 / 9;
+  max-height: 210px; /* just above the 360px-wide 16:9 natural height (202.5px) so the collapse transition below starts shrinking almost immediately */
   border-radius: var(--radius);
   background: var(--surface);
   border: 1px solid var(--border);
@@ -809,53 +814,76 @@ textarea.profile-textarea:focus { border-color: var(--accent); }
   align-items: center;
   justify-content: center;
   overflow: hidden;
-  flex-shrink: 1;
-  min-height: 0;
+  transition: max-height 0.3s ease;
 }
-/* Mini-window: fixed-docked bottom-right, floating above the panel content
-   that has scrolled/flowed up beneath it. Sized/positioned via plain CSS —
-   the visible jump between in-flow and fixed is smoothed by a JS FLIP
-   transform animation (see setNowPlayingCollapsed in app.js), not by this
-   rule directly. Offsets track --bottomnav-h/--askform-h so it never covers
-   the pinned input bar. */
-.now-playing-visual--mini {
-  position: fixed;
-  width: 160px;
-  max-width: 160px;
-  bottom: calc(var(--bottomnav-h, 73px) + var(--askform-h, 73px) + 12px);
-  right: 16px;
-  z-index: 60;
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.55);
-  cursor: pointer;
-}
+/* Collapsing sets this element's own computed height to 0 (not just visually
+   clipped by an ancestor) so .now-playing-video-slot's rect genuinely shrinks
+   to match — syncNowPlayingUI() then resizes the real #audio-container to
+   the same 0-size, matching it exactly. The iframe itself is never
+   display:none'd, destroyed, or has its src changed — see syncNowPlayingUI()
+   in app.js. Whether YouTube keeps playing at 0×0 is exactly what the manual
+   test in point 7 checks. */
+.now-playing-region.collapsed .now-playing-visual { max-height: 0; }
 
 .now-playing-video-slot { width: 100%; height: 100%; }
 
-/* Collapse/expand toggle — sits in the corner of .now-playing-visual in both
-   states (rides along automatically since that element is never destroyed,
-   just resized/repositioned). z-index above .audio-container's (z-index:1)
-   so it stays clickable on top of the real embedded video. */
+/* Collapse/expand toggle in the region's own bottom-right corner — visible
+   only while expanded (the collapsed strip below has its own copy). No
+   longer overlays the video (it never did need to; simpler to keep it off
+   to the side of .now-playing-region entirely), so no z-index fight with
+   #audio-container is needed. */
 .np-collapse-btn {
-  position: absolute;
-  bottom: 6px;
-  right: 6px;
-  width: 44px;
-  height: 44px;
-  background: rgba(10, 10, 10, 0.55);
-  border: 1px solid rgba(200, 169, 110, 0.5);
+  width: 32px;
+  height: 32px;
   border-radius: 50%;
+  background: var(--accent-dim);
+  border: 1px solid rgba(200, 169, 110, 0.45);
   color: var(--accent);
-  font-size: 0.75rem;
-  line-height: 1;
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  z-index: 5;
-  transition: background 0.15s ease, transform 0.1s ease;
+  transition: background 0.15s ease, transform 0.1s ease, opacity 0.2s ease;
 }
-.np-collapse-btn:hover { background: rgba(10, 10, 10, 0.75); }
+.np-collapse-btn svg { width: 16px; height: 16px; stroke: currentColor; fill: none; }
+.np-collapse-btn:hover { background: rgba(200, 169, 110, 0.3); }
 .np-collapse-btn:active { transform: scale(0.9); }
+
+.np-collapse-btn--region {
+  position: absolute;
+  bottom: 8px;
+  right: 8px;
+  z-index: 2;
+}
+.now-playing-region.collapsed .np-collapse-btn--region { opacity: 0; pointer-events: none; }
+
+/* Collapsed placeholder strip — a separate element (not the collapsing
+   visual/title/controls) that grows from 0 to ~44px as those three shrink,
+   so the region's total height animates smoothly between the two states
+   without needing to precompute an overall max-height for the whole region. */
+.now-playing-strip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  height: 0;
+  overflow: hidden;
+  transition: height 0.3s ease;
+  cursor: pointer;
+}
+.now-playing-region.collapsed .now-playing-strip { height: 44px; }
+.now-playing-strip-note { color: var(--accent); font-size: 1rem; flex-shrink: 0; }
+.now-playing-strip-text {
+  flex: 1;
+  min-width: 0;
+  color: var(--text);
+  font-size: 0.92rem;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.np-collapse-btn--strip { flex-shrink: 0; }
 
 .dj-orb {
   width: 42%;
@@ -1004,7 +1032,15 @@ textarea.profile-textarea:focus { border-color: var(--accent); }
   100% { transform: scaleY(0.5); }
 }
 
+/* The independently-scrolling region (dj-card + queue) — flex:1 fills
+   whatever height .now-playing-region isn't using (more of it once
+   collapsed), min-height:0 lets it actually shrink to that share instead of
+   overflowing its flex parent, and overflow-y:auto is what turns that into a
+   genuine internal scrollbar rather than relying on body-level scroll. */
 .now-playing-panel {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
   padding: 16px;
   border-top: 1px solid var(--border);
 }
@@ -1021,16 +1057,9 @@ textarea.profile-textarea:focus { border-color: var(--accent); }
 
 @media (min-width: 768px) {
   .player-columns { flex-direction: row; align-items: flex-start; }
-  .now-playing-region {
-    flex: 0 0 42%;
-    min-height: auto;
-    /* Row layout stretches the panel column to fit the tracklist, which can
-       run much taller than the viewport — pin the (shorter) video column so
-       it stays visible instead of centering somewhere off past the fold.
-       top offset kept in sync with the topbar's real height (env safe-area
-       makes it non-constant) via the --topbar-h write in syncNowPlayingUI(). */
-    position: sticky;
-    top: var(--topbar-h, 53px);
-  }
-  .now-playing-panel { flex: 1 1 58%; border-top: none; border-left: 1px solid var(--border); }
+  .now-playing-region { flex: 0 0 42%; }
+  /* align-self:stretch overrides the row's flex-start so this column fills
+     the full bounded height of .player-columns (needed for its own
+     overflow-y:auto to have a definite box to scroll within). */
+  .now-playing-panel { flex: 1 1 58%; align-self: stretch; border-top: none; border-left: 1px solid var(--border); }
 }

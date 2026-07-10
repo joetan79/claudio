@@ -276,6 +276,10 @@ function render() {
     if (state.view === 'player') fillPlayer();
     else fillProfile();
   }
+  // Bounded-height shell only for the player view (6C-fix) — needed so
+  // .now-playing-panel's overflow-y:auto has a definite box to scroll
+  // within; other views keep the normal body-scrolling min-height:100vh.
+  root.classList.toggle('app--player-shell', state.view === 'player');
   if (state.view === 'player') startNowPlayingSync();
   else stopNowPlayingSync();
   attachEvents();
@@ -495,6 +499,14 @@ function fillPlayer() {
   }
 }
 
+// SVG chevrons (6C-fix) — line style matches the existing stroke-based nav
+// icons elsewhere in the shell. Expanded state shows chevron-up (in the
+// region's own corner); collapsed state shows chevron-down (in the strip).
+// Each button only ever displays one fixed icon since only one of the two
+// is ever visible at a time — no dynamic glyph-swapping needed.
+const CHEVRON_UP_SVG = '<svg viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 15l-6-6-6 6"/></svg>';
+const CHEVRON_DOWN_SVG = '<svg viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>';
+
 // Now Playing region (video slot / DJ orb / title / transport controls) sits
 // above a scrollable panel that reuses the exact same dj-card/songs-label/
 // btn-play-all/renderSong markup as before — only its container moved.
@@ -525,14 +537,13 @@ function renderPlayerContent() {
   return `
 <div class="player-columns">
   <div class="now-playing-region ${npCollapsed ? 'collapsed' : ''}" id="now-playing-region">
-    <div class="now-playing-visual ${npCollapsed ? 'now-playing-visual--mini' : ''}" id="now-playing-visual">
+    <div class="now-playing-visual" id="now-playing-visual">
       <div class="now-playing-video-slot" id="now-playing-video-slot"></div>
       <div class="dj-orb" id="dj-orb">
         <div class="dj-orb-ring"></div>
         <div class="dj-orb-ring"></div>
         <div class="dj-orb-core"></div>
       </div>
-      <button class="np-collapse-btn" id="np-collapse-toggle" aria-label="Collapse Now Playing">${npCollapsed ? '▲' : '▼'}</button>
     </div>
     <div class="now-playing-title-block">
       <div class="now-playing-song" id="now-playing-song">${esc(i18n.t('noSongPlaying'))}</div>
@@ -545,6 +556,12 @@ function renderPlayerContent() {
         <button class="np-ctrl-btn np-ctrl-playpause" id="np-btn-playpause">▶</button>
       </div>
       <button class="np-ctrl-btn np-ctrl-next" id="np-btn-next" disabled>▶▶</button>
+    </div>
+    <button class="np-collapse-btn np-collapse-btn--region" id="np-collapse-toggle" aria-label="Collapse Now Playing">${CHEVRON_UP_SVG}</button>
+    <div class="now-playing-strip" id="now-playing-strip">
+      <span class="now-playing-strip-note">♪</span>
+      <span class="now-playing-strip-text" id="now-playing-strip-text"></span>
+      <button class="np-collapse-btn np-collapse-btn--strip" id="np-collapse-toggle-strip" aria-label="Expand Now Playing">${CHEVRON_DOWN_SVG}</button>
     </div>
   </div>
   <div class="now-playing-panel" id="now-playing-panel">
@@ -849,15 +866,19 @@ function attachPlayerEvents() {
   document.getElementById('np-btn-prev')?.addEventListener('click', () => window.playPrevious());
   document.getElementById('np-btn-next')?.addEventListener('click', () => window.playNext());
 
-  // Collapse/expand toggle (Phase 6C). stopPropagation so the mini-window's
-  // own "click anywhere to expand" listener below doesn't immediately
-  // re-toggle it back after this handler already flipped the state.
-  document.getElementById('np-collapse-toggle')?.addEventListener('click', e => {
-    e.stopPropagation();
-    toggleNowPlayingCollapse();
+  // Collapse/expand toggle (6C-fix). Corner button collapses; the strip
+  // (button or anywhere on it) expands. stopPropagation on the strip's own
+  // button so its click doesn't also bubble into the strip's row handler
+  // and fire a second, redundant toggle.
+  document.getElementById('np-collapse-toggle')?.addEventListener('click', () => {
+    setNowPlayingCollapsed(true);
   });
-  document.getElementById('now-playing-visual')?.addEventListener('click', () => {
-    if (npCollapsed) toggleNowPlayingCollapse();
+  document.getElementById('np-collapse-toggle-strip')?.addEventListener('click', e => {
+    e.stopPropagation();
+    setNowPlayingCollapsed(false);
+  });
+  document.getElementById('now-playing-strip')?.addEventListener('click', () => {
+    setNowPlayingCollapsed(false);
   });
 
   // Queue row click = jump-play. Delegates to the row's own existing Play
@@ -1337,37 +1358,30 @@ function stopNowPlayingSync() {
   npCollapsed = false;
 }
 
-// ── Now Playing collapse/expand (Phase 6C, visual layer only) ──────────────
+// ── Now Playing collapse/expand (6C-fix, visual layer only) ────────────────
 // In-memory only (not persisted); reset to expanded on song change (below)
-// and on leaving the player view (stopNowPlayingSync above).
+// and on leaving the player view (stopNowPlayingSync above). Pure CSS
+// collapse now (no mini-window, no FLIP transform) — toggling the
+// "collapsed" class drives every visual change via the CSS rules on
+// .now-playing-visual/.now-playing-title-block/.now-playing-controls/
+// .now-playing-strip. The two collapse buttons are static (chevron-up only
+// ever shown expanded, chevron-down only ever shown collapsed), so there's
+// no glyph-swapping to do here either.
 let npCollapsed = false;
-
-function updateCollapseToggleGlyph() {
-  const btn = document.getElementById('np-collapse-toggle');
-  if (btn) btn.textContent = npCollapsed ? '▲' : '▼';
-}
 
 // Auto-reset (no user-facing toggle animation needed — this fires on
 // background events like auto-advancing to the next queued song).
 function resetNowPlayingCollapse() {
   if (!npCollapsed) return;
   npCollapsed = false;
-  const region = document.getElementById('now-playing-region');
-  const visual = document.getElementById('now-playing-visual');
-  region?.classList.remove('collapsed');
-  if (visual) {
-    visual.classList.remove('now-playing-visual--mini');
-    visual.style.transition = '';
-    visual.style.transform = '';
-  }
-  updateCollapseToggleGlyph();
+  document.getElementById('now-playing-region')?.classList.remove('collapsed');
 }
 
 // Briefly re-runs the existing, untouched syncNowPlayingUI() on every frame
 // for the duration of the collapse/expand transition, so the real embedded
-// video (repositioned by that function to overlay .now-playing-video-slot)
-// visually keeps up with the animating mini-window instead of snapping to
-// its final spot only once the next 400ms poll tick happens.
+// video iframe (resized by that function to match .now-playing-video-slot's
+// shrinking/growing rect) visually keeps pace with the CSS animation instead
+// of jumping to its final size only once the next 400ms poll tick happens.
 function runCollapseTransitionSync(durationMs) {
   const start = performance.now ? performance.now() : Date.now();
   function tick() {
@@ -1378,40 +1392,10 @@ function runCollapseTransitionSync(durationMs) {
   requestAnimationFrame(tick);
 }
 
-// User-initiated toggle — FLIP-animates .now-playing-visual (video/mini
-// window) between its normal in-flow position and the fixed mini-window
-// spot via a transform, since animating between position:static and
-// position:fixed can't be done with a plain CSS transition.
 function setNowPlayingCollapsed(collapsed) {
   if (npCollapsed === collapsed) return;
-  const visual = document.getElementById('now-playing-visual');
-  const region = document.getElementById('now-playing-region');
-  if (!visual || !region) { npCollapsed = collapsed; return; }
-
-  const firstRect = visual.getBoundingClientRect();
-
   npCollapsed = collapsed;
-  region.classList.toggle('collapsed', collapsed);
-  visual.classList.toggle('now-playing-visual--mini', collapsed);
-  updateCollapseToggleGlyph();
-
-  const lastRect = visual.getBoundingClientRect();
-  const dx = firstRect.left - lastRect.left;
-  const dy = firstRect.top - lastRect.top;
-  const scaleX = firstRect.width / lastRect.width;
-  const scaleY = firstRect.height / lastRect.height;
-
-  visual.style.transition = 'none';
-  visual.style.transformOrigin = 'top left';
-  visual.style.transform = `translate(${dx}px, ${dy}px) scale(${scaleX}, ${scaleY})`;
-  void visual.offsetWidth; // force reflow so the "from" transform actually applies before animating
-  visual.style.transition = 'transform 0.3s ease';
-  visual.style.transform = 'none';
-  visual.addEventListener('transitionend', () => {
-    visual.style.transition = '';
-    visual.style.transform = '';
-  }, { once: true });
-
+  document.getElementById('now-playing-region')?.classList.toggle('collapsed', collapsed);
   runCollapseTransitionSync(350);
 }
 
@@ -1460,15 +1444,17 @@ function positionAudioContainerOffscreen() {
 function updateNowPlayingTitle(song) {
   const titleEl = document.getElementById('now-playing-song');
   const artistEl = document.getElementById('now-playing-artist');
+  const stripTextEl = document.getElementById('now-playing-strip-text');
   if (!titleEl || !artistEl) return;
   const name = song?.song_name || song?.ncm?.name || song?.song || song?.query || '';
   const artist = song?.artist || song?.ncm?.artist || '';
   const key = name + '|' + artist;
   if (key === lastNpTitleKey) return;
   lastNpTitleKey = key;
-  resetNowPlayingCollapse(); // song changed — point 4: reset to expanded
+  resetNowPlayingCollapse(); // song changed — point 5: reset to expanded
   titleEl.textContent = name || i18n.t('noSongPlaying');
   artistEl.textContent = artist;
+  if (stripTextEl) stripTextEl.textContent = name ? (artist ? `${name} – ${artist}` : name) : i18n.t('noSongPlaying');
   [titleEl, artistEl].forEach(el => {
     el.classList.remove('np-fade-in');
     void el.offsetWidth; // restart the animation
@@ -1479,23 +1465,6 @@ function updateNowPlayingTitle(song) {
 function syncNowPlayingUI() {
   if (state.view !== 'player') return;
 
-  // Keeps .ask-form's sticky bottom offset (--bottomnav-h) and the desktop
-  // now-playing-region's sticky top offset (--topbar-h) matched to those
-  // bars' actual rendered heights (both vary with safe-area insets).
-  const bottomnav = document.querySelector('.bottomnav');
-  if (bottomnav) {
-    document.documentElement.style.setProperty('--bottomnav-h', bottomnav.getBoundingClientRect().height + 'px');
-  }
-  const topbar = document.querySelector('.topbar');
-  if (topbar) {
-    document.documentElement.style.setProperty('--topbar-h', topbar.getBoundingClientRect().height + 'px');
-  }
-  // Keeps the collapsed mini-window's bottom offset clear of the ask-form.
-  const askForm = document.querySelector('.ask-form');
-  if (askForm) {
-    document.documentElement.style.setProperty('--askform-h', askForm.getBoundingClientRect().height + 'px');
-  }
-
   const slot = document.getElementById('now-playing-video-slot');
   const orb = document.getElementById('dj-orb');
   const audioEl = document.getElementById('audio-container');
@@ -1503,15 +1472,17 @@ function syncNowPlayingUI() {
 
   if (slot && orb && audioEl) {
     if (hasActiveVideo) {
+      // Always applied, including 0-size rects — .now-playing-visual's own
+      // max-height genuinely collapses to 0 (6C-fix point 3), and the real
+      // iframe needs to shrink to match exactly rather than staying at its
+      // last (pre-collapse) size, which a "skip if 0" guard would cause.
       const rect = slot.getBoundingClientRect();
-      if (rect.width > 0 && rect.height > 0) {
-        audioEl.classList.add('audio-container-active');
-        audioEl.style.position = 'fixed';
-        audioEl.style.top = rect.top + 'px';
-        audioEl.style.left = rect.left + 'px';
-        audioEl.style.width = rect.width + 'px';
-        audioEl.style.height = rect.height + 'px';
-      }
+      audioEl.classList.add('audio-container-active');
+      audioEl.style.position = 'fixed';
+      audioEl.style.top = rect.top + 'px';
+      audioEl.style.left = rect.left + 'px';
+      audioEl.style.width = rect.width + 'px';
+      audioEl.style.height = rect.height + 'px';
       slot.style.display = '';
       orb.style.display = 'none';
     } else {
@@ -1533,7 +1504,10 @@ function syncNowPlayingUI() {
     if (hasActiveVideo) {
       try { playing = ytApiReady && ytPlayers[currentPlayingIndex].getPlayerState() === YT.PlayerState.PLAYING; } catch (e) {}
     }
-    btnPlayPause.textContent = playing ? '⏸' : '▶';
+    // '⏸' (U+23F8) renders as a missing-glyph box in some environments — '||'
+    // is plain ASCII, guaranteed to render everywhere, same fix class as the
+    // ◀◀/▶▶ prev/next glyphs above.
+    btnPlayPause.textContent = playing ? '||' : '▶';
     freqRingYtPlaying = playing;
     updateFreqRingActive();
   }
