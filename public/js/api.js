@@ -60,6 +60,21 @@ const api = {
   played(song_name, artist, song_id) {
     return this.request('POST', '/api/radio/played', { song_name, artist, song_id: song_id || null });
   },
+  async transcribe(blob) {
+    const headers = { 'Content-Type': blob.type || 'audio/webm' };
+    const token = this.getToken();
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    let res;
+    try {
+      res = await fetch('/api/radio/transcribe', { method: 'POST', headers, body: blob });
+    } catch (err) {
+      mlog('fetch error: ' + err.message);
+      throw err;
+    }
+    const data = await res.json();
+    if (!res.ok) throw Object.assign(new Error(data.error || 'Request failed'), { status: res.status, code: data.code });
+    return data;
+  },
 
   // Profile
   getTaste() { return this.request('GET', '/api/profile/taste'); },

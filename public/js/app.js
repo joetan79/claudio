@@ -54,6 +54,150 @@ function playDJAudio(audioUrl) {
 
 window.playDJAudio = playDJAudio;
 
+// ── Voice input (push-to-talk / click-to-toggle) ────────────────────────────
+const MIC_HOLD_THRESHOLD_MS = 300; // press-release shorter than this = "click" (toggle mode)
+const MIC_MAX_DURATION_MS = 60000; // hard cap, mirrors the server's own limit
+const MIC_SVG = '<svg viewBox="0 0 24 24" stroke="currentColor" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 11a7 7 0 0 1-14 0"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="8" y1="22" x2="16" y2="22"/></svg>';
+
+const mic = {
+  recording: false,
+  transcribing: false,
+  starting: false,
+  toggleMode: false,
+  recorder: null,
+  stream: null,
+  chunks: [],
+  mimeType: '',
+  startTs: 0,
+  pressStartTs: 0,
+  timerId: null,
+  autoStopId: null,
+};
+
+function micSupported() {
+  return !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.MediaRecorder);
+}
+
+function pickMicMimeType() {
+  const candidates = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4'];
+  for (const c of candidates) {
+    if (window.MediaRecorder?.isTypeSupported?.(c)) return c;
+  }
+  return ''; // let the browser pick a default (e.g. iOS Safari)
+}
+
+function formatMicDuration() {
+  if (!mic.recording) return '0:00';
+  const secs = Math.floor((Date.now() - mic.startTs) / 1000);
+  return `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`;
+}
+
+function updateMicUI() {
+  const btn = document.getElementById('btn-mic');
+  if (!btn) return;
+  btn.classList.toggle('recording', mic.recording);
+  btn.classList.toggle('transcribing', mic.transcribing);
+  btn.title = mic.transcribing ? i18n.t('transcribing') : (mic.recording ? i18n.t('micRecording') : i18n.t('micHint'));
+  const durEl = document.getElementById('mic-duration');
+  if (durEl) {
+    durEl.style.display = mic.recording ? '' : 'none';
+    durEl.textContent = formatMicDuration();
+  }
+}
+
+async function micPointerDown(e) {
+  e.preventDefault();
+  if (mic.transcribing || mic.recording || mic.starting) return;
+
+  if (!micSupported()) {
+    state.error = i18n.t('micNotSupported');
+    fillPlayer();
+    attachPlayerEvents();
+    return;
+  }
+
+  mic.pressStartTs = Date.now();
+  mic.starting = true;
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    mic.stream = stream;
+    mic.mimeType = pickMicMimeType();
+    const recorder = mic.mimeType ? new MediaRecorder(stream, { mimeType: mic.mimeType }) : new MediaRecorder(stream);
+    mic.recorder = recorder;
+    mic.chunks = [];
+    recorder.ondataavailable = ev => { if (ev.data?.size) mic.chunks.push(ev.data); };
+    recorder.onstop = handleMicStop;
+    recorder.start();
+
+    mic.recording = true;
+    mic.starting = false;
+    mic.toggleMode = false;
+    mic.startTs = Date.now();
+    updateMicUI();
+    mic.timerId = setInterval(updateMicUI, 500);
+    mic.autoStopId = setTimeout(stopMicRecording, MIC_MAX_DURATION_MS);
+  } catch (err) {
+    mic.starting = false;
+    console.error('mic permission error:', err);
+    state.error = i18n.t('micPermissionDenied');
+    fillPlayer();
+    attachPlayerEvents();
+  }
+}
+
+function micPointerUp(e) {
+  e.preventDefault();
+  if (mic.starting || !mic.recording) return;
+
+  const heldMs = Date.now() - mic.pressStartTs;
+  if (heldMs < MIC_HOLD_THRESHOLD_MS && !mic.toggleMode) {
+    // Quick click (not a hold): switch to click-to-toggle mode — keep
+    // recording until the button is clicked again. Desktop-friendly
+    // alternative to holding the button down for the whole utterance.
+    mic.toggleMode = true;
+    updateMicUI();
+    return;
+  }
+  stopMicRecording();
+}
+
+function stopMicRecording() {
+  if (mic.timerId) { clearInterval(mic.timerId); mic.timerId = null; }
+  if (mic.autoStopId) { clearTimeout(mic.autoStopId); mic.autoStopId = null; }
+  if (!mic.recording || !mic.recorder) return;
+  mic.recording = false;
+  try { mic.recorder.stop(); } catch (e) { console.error('mic stop error:', e); }
+  mic.stream?.getTracks().forEach(t => t.stop());
+  mic.stream = null;
+}
+
+async function handleMicStop() {
+  const blob = new Blob(mic.chunks, { type: mic.mimeType || 'audio/webm' });
+  mic.chunks = [];
+  mic.toggleMode = false;
+  if (!blob.size) { updateMicUI(); return; }
+
+  mic.transcribing = true;
+  updateMicUI();
+  try {
+    const result = await api.transcribe(blob);
+    const input = document.getElementById('ask-input');
+    if (input && result.text) {
+      input.value = result.text;
+      input.style.height = 'auto';
+      input.style.height = Math.min(input.scrollHeight, 120) + 'px';
+      input.focus();
+    }
+  } catch (err) {
+    console.error('transcribe failed:', err);
+    state.error = err.message || i18n.t('micError');
+  } finally {
+    mic.transcribing = false;
+    fillPlayer();
+    attachPlayerEvents();
+  }
+}
+
 // ── State ──────────────────────────────────────────────────────────────────
 const state = {
   user: null,
@@ -573,6 +717,11 @@ function renderPlayerContent() {
   <textarea class="ask-input" id="ask-input" rows="1"
     placeholder="${esc(i18n.t('inputPlaceholder'))}"
   ></textarea>
+  <button class="btn-mic ${mic.recording ? 'recording' : ''} ${mic.transcribing ? 'transcribing' : ''}" id="btn-mic"
+    type="button" title="${esc(mic.transcribing ? i18n.t('transcribing') : (mic.recording ? i18n.t('micRecording') : i18n.t('micHint')))}">
+    ${MIC_SVG}
+    <span class="mic-duration" id="mic-duration" style="display:${mic.recording ? '' : 'none'}">${formatMicDuration()}</span>
+  </button>
   <button class="btn-ask" id="btn-ask" ${state.loading ? 'disabled' : ''}>
     ${state.loading ? esc(i18n.t('loading')) : esc(i18n.t('send'))}
   </button>
@@ -859,6 +1008,15 @@ function attachPlayerEvents() {
     const msg = input?.value.trim() || '';
     await runDecision(msg, { onSuccessClearInput: input });
   });
+
+  // Mic: pointerdown starts recording (works for mouse + touch). A quick
+  // release (< MIC_HOLD_THRESHOLD_MS) switches into click-to-toggle mode
+  // instead of stopping — see micPointerUp for the hold-vs-click logic.
+  const micBtn = document.getElementById('btn-mic');
+  micBtn?.addEventListener('pointerdown', micPointerDown);
+  micBtn?.addEventListener('pointerup', micPointerUp);
+  micBtn?.addEventListener('pointercancel', () => { if (mic.recording) stopMicRecording(); });
+  micBtn?.addEventListener('pointerleave', () => { if (mic.recording && !mic.toggleMode) stopMicRecording(); });
 
   // Now Playing transport controls — call straight into the existing,
   // untouched playAll/toggleYT/playNext/playPrevious functions.

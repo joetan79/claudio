@@ -1,13 +1,15 @@
-import { Router } from 'express';
+import { Router, raw } from 'express';
 import { requireAuth } from '../middleware/auth.js';
 import { getUserDb } from '../db/index.js';
-import { djDecision, getTimeOfDay } from '../modules/claude.js';
+import { djDecision, getTimeOfDay, detectLang } from '../modules/claude.js';
 import { synthesize } from '../modules/tts.js';
+import { transcribe } from '../modules/asr.js';
 import { resolveSong, getSongUrl } from '../modules/ncm.js';
 import { searchYouTube, resolveSongVideos } from '../modules/youtube.js';
 import { resolveVoiceRefForUser } from '../modules/settings.js';
 
 const router = Router();
+const parseAudioBody = raw({ type: 'audio/*', limit: '2mb' });
 
 // No auth — used by <audio> elements to refresh expired NCM links
 router.get('/song-url/:id', async (req, res) => {
@@ -133,6 +135,27 @@ router.post('/decide', async (req, res) => {
 
   console.log(`[timing] decide_total_ms=${Date.now() - tRequestStart}`);
   res.json(result);
+});
+
+router.post('/transcribe', (req, res, next) => {
+  parseAudioBody(req, res, (err) => {
+    if (err) return res.status(413).json({ error: 'Audio too large (max 2MB)' });
+    next();
+  });
+}, async (req, res) => {
+  const uid = req.user.uid;
+  if (!Buffer.isBuffer(req.body) || !req.body.length) {
+    return res.status(400).json({ error: 'No audio received' });
+  }
+
+  try {
+    const text = await transcribe(req.body, { uid, mimeType: req.headers['content-type'] });
+    const language = detectLang(text) === 'zh' ? 'zh' : 'en';
+    res.json({ text, language });
+  } catch (e) {
+    if (e.code === 'OWN_KEY_INVALID') return res.status(e.status || 401).json({ error: e.message, code: e.code });
+    res.status(e.status || 500).json({ error: e.message || 'Transcription failed' });
+  }
 });
 
 router.get('/now', (req, res) => {

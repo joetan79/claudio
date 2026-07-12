@@ -102,6 +102,12 @@ const LANGS = {
     obStyleConcise: 'Concise & Professional',
     obReplyStyle: "Got it, I'll bring the {v} energy.",
     obWelcomeDone: "All set! Let me put together your very first playlist...",
+    micHint: 'Hold to talk, or click to start/stop',
+    micRecording: 'Recording — release or click to stop',
+    transcribing: 'Transcribing…',
+    micPermissionDenied: 'Microphone access was denied. Please enable it in your browser/app settings to use voice input.',
+    micNotSupported: 'Voice input is not supported on this device/browser.',
+    micError: 'Voice recognition failed. Please try again or type instead.',
   },
   zh: {
     appName: 'Claudio',
@@ -206,6 +212,12 @@ const LANGS = {
     obStyleConcise: '简洁专业',
     obReplyStyle: '风格是{v}，就这么定了。',
     obWelcomeDone: '都记下啦，我这就给你准备第一份见面礼歌单……',
+    micHint: '按住说话，或点击开始/结束',
+    micRecording: '录音中——松开或再次点击结束',
+    transcribing: '识别中…',
+    micPermissionDenied: '麦克风权限被拒绝，请在浏览器/App 设置中开启麦克风权限后再试。',
+    micNotSupported: '当前设备/浏览器不支持语音输入。',
+    micError: '语音识别失败，请重试或改用文字输入。',
   },
 };
 

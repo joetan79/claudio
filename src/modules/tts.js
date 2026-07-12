@@ -13,7 +13,7 @@ function hashText(text, voiceRef) {
   return crypto.createHash('md5').update(`${text}|${voiceRef || ''}`).digest('hex');
 }
 
-function getUserFishKey(uid) {
+export function getUserFishKey(uid) {
   if (!uid || !isEncryptionEnabled()) return null;
   const db = getSystemDb();
   const row = db.prepare('SELECT fish_key FROM users WHERE id = ?').get(uid);

@@ -40,7 +40,7 @@ function normalizeSongs(result) {
   return result;
 }
 
-function detectLang(text) {
+export function detectLang(text) {
   if (!text || !text.trim()) return 'zh';
   const chineseChars = (text.match(/[一-鿿]/g) || []).length;
   const totalChars = text.replace(/\s/g, '').length;
