@@ -299,6 +299,23 @@ html, body {
 }
 .btn-played:disabled { cursor: default; }
 
+/* ── Mic toast ── lightweight, self-dismissing error strip anchored right
+   above the ask-form. Separate from .dj-error (which reports decide-call
+   failures further up in the now-playing panel) since this is specifically
+   about the mic/transcribe step and needs to be visible right next to the
+   input the user is about to interact with. */
+.mic-toast {
+  flex: 0 0 auto;
+  margin: 0 16px;
+  padding: 8px 14px;
+  background: #e5484d22;
+  border: 1px solid #e5484d;
+  border-radius: var(--radius-sm);
+  color: #e5484d;
+  font-size: 0.82rem;
+  line-height: 1.4;
+}
+
 /* ── Ask input ── always visible above bottom nav on the player view.
    .view.player-view is a bounded flex column (see #app.app--player-shell
    above) and this is its last child, so it just naturally sits at the

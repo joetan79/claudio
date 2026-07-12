@@ -109,6 +109,8 @@ const LANGS = {
     micNotSupported: 'Voice input is not supported on this device/browser.',
     micError: 'Voice recognition failed. Please try again or type instead.',
     micRecorderError: 'Could not start recording on this device. Please try again or type instead.',
+    micErrorNetwork: 'Network error — please check your connection and try again.',
+    micEmptyResult: "Didn't catch that — please try again.",
   },
   zh: {
     appName: 'Claudio',
@@ -220,6 +222,8 @@ const LANGS = {
     micNotSupported: '当前设备/浏览器不支持语音输入。',
     micError: '语音识别失败，请重试或改用文字输入。',
     micRecorderError: '当前设备无法开始录音，请重试或改用文字输入。',
+    micErrorNetwork: '网络连接失败，请检查网络后重试。',
+    micEmptyResult: '没有听清，请再试一次。',
   },
 };
 

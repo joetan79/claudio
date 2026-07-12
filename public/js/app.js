@@ -59,6 +59,9 @@ const MIC_HOLD_THRESHOLD_MS = 300; // press-release shorter than this = "click" 
 const MIC_MAX_DURATION_MS = 60000; // hard cap, mirrors the server's own limit
 const MIC_SVG = '<svg viewBox="0 0 24 24" stroke="currentColor" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 11a7 7 0 0 1-14 0"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="8" y1="22" x2="16" y2="22"/></svg>';
 
+const MIC_AUTOSEND_DELAY_MS = 300; // let the user see the recognized text before it's sent
+const MIC_TOAST_DURATION_MS = 3000;
+
 const mic = {
   recording: false,
   transcribing: false,
@@ -72,7 +75,50 @@ const mic = {
   pressStartTs: 0,
   timerId: null,
   autoStopId: null,
+  toastMessage: null,
+  toastTimer: null,
 };
+
+// Same silent-clip unlock runDecision() does, extracted so it can also run
+// synchronously inside the pointerup handler (still a real user gesture) —
+// the auto-send path calls runDecision() ~300ms + a network round-trip
+// later, well outside any gesture, so the unlock must happen earlier here
+// to be safe on gesture-strict browsers (notably iOS Safari). Idempotent:
+// a currentAudio already unlocked by an earlier click/tap makes this a no-op.
+function ensureAudioUnlocked() {
+  if (currentAudio) return;
+  currentAudio = new Audio();
+  attachDjOrbPulseHooks(currentAudio);
+  currentAudio.src = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=';
+  currentAudio.play().catch(() => {});
+}
+
+function showMicToast(message) {
+  if (mic.toastTimer) clearTimeout(mic.toastTimer);
+  mic.toastMessage = message;
+  renderMicToast();
+  mic.toastTimer = setTimeout(() => {
+    mic.toastMessage = null;
+    mic.toastTimer = null;
+    renderMicToast();
+  }, MIC_TOAST_DURATION_MS);
+}
+
+function renderMicToast() {
+  const el = document.getElementById('mic-toast');
+  if (!el) return;
+  el.textContent = mic.toastMessage || '';
+  el.style.display = mic.toastMessage ? '' : 'none';
+}
+
+// Maps a differentiated transcribe() failure (see api.js's `stage` tag) to a
+// user-facing message. 'network' gets a purpose-written message since the
+// raw browser error ("Failed to fetch" etc.) isn't useful to show; 'server'
+// and 'parse' already carry a clear message from the backend/api.js itself.
+function micErrorMessage(err) {
+  if (err?.stage === 'network') return i18n.t('micErrorNetwork');
+  return err?.message || i18n.t('micError');
+}
 
 function micSupported() {
   return !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.MediaRecorder);
@@ -107,15 +153,18 @@ function updateMicUI() {
 
 async function micPointerDown(e) {
   e.preventDefault();
-  if (mic.transcribing || mic.recording || mic.starting) return;
+  if (mic.transcribing || mic.recording || mic.starting || state.loading) return;
 
   if (!micSupported()) {
     mlog('[mic] unsupported', 'getUserMedia=' + !!navigator.mediaDevices?.getUserMedia, 'MediaRecorder=' + !!window.MediaRecorder);
-    state.error = i18n.t('micNotSupported');
-    fillPlayer();
-    attachPlayerEvents();
+    showMicToast(i18n.t('micNotSupported'));
     return;
   }
+
+  // Clear any leftover toast from a previous failed attempt so it doesn't
+  // linger, confusingly, over a fresh recording.
+  if (mic.toastTimer) { clearTimeout(mic.toastTimer); mic.toastTimer = null; }
+  if (mic.toastMessage) { mic.toastMessage = null; renderMicToast(); }
 
   mic.pressStartTs = Date.now();
   mic.starting = true;
@@ -131,9 +180,7 @@ async function micPointerDown(e) {
     mic.starting = false;
     mlog('[mic] getUserMedia failed', `${err.name}: ${err.message}`);
     console.error('mic permission error:', err);
-    state.error = i18n.t('micPermissionDenied');
-    fillPlayer();
-    attachPlayerEvents();
+    showMicToast(i18n.t('micPermissionDenied'));
     return;
   }
   mic.stream = stream;
@@ -164,15 +211,19 @@ async function micPointerDown(e) {
     console.error('mic recorder error:', err);
     stream.getTracks().forEach(t => t.stop());
     mic.stream = null;
-    state.error = i18n.t('micRecorderError');
-    fillPlayer();
-    attachPlayerEvents();
+    showMicToast(i18n.t('micRecorderError'));
   }
 }
 
 function micPointerUp(e) {
   e.preventDefault();
   if (mic.starting || !mic.recording) return;
+
+  // pointerup is still a real user gesture — unlock audio playback here so
+  // it's guaranteed to be within a gesture stack, since the auto-send path
+  // calls runDecision() ~300ms + a network round-trip after this returns,
+  // well outside any gesture on stricter browsers (see ensureAudioUnlocked).
+  ensureAudioUnlocked();
 
   const heldMs = Date.now() - mic.pressStartTs;
   if (heldMs < MIC_HOLD_THRESHOLD_MS && !mic.toggleMode) {
@@ -215,21 +266,42 @@ async function handleMicStop() {
   updateMicUI();
   try {
     const result = await api.transcribe(blob);
+    const text = (result.text || '').trim();
+
+    if (!text) {
+      mlog('[mic] empty transcription result');
+      showMicToast(i18n.t('micEmptyResult'));
+      return;
+    }
+
+    // Fill the input so the user sees what was recognized, then auto-send
+    // shortly after — same runDecision() call the manual "Tell Claudio"
+    // click uses, so TTS unlock / video-id resolution / error handling all
+    // go through the one existing path, nothing bypassed or duplicated.
     const input = document.getElementById('ask-input');
-    if (input && result.text) {
-      input.value = result.text;
+    if (input) {
+      input.value = text;
       input.style.height = 'auto';
       input.style.height = Math.min(input.scrollHeight, 120) + 'px';
       input.focus();
     }
+    mlog('[mic] auto-send scheduled', `text="${text.slice(0, 60)}"`);
+    setTimeout(() => {
+      runDecision(text, { onSuccessClearInput: document.getElementById('ask-input') });
+    }, MIC_AUTOSEND_DELAY_MS);
   } catch (err) {
     console.error('transcribe failed:', 'stage=' + (err.stage || 'unknown'), err);
     mlog('[mic] transcribe failed', `stage=${err.stage || 'unknown'}`, `status=${err.status ?? 'n/a'}`, err.message);
-    state.error = err.message || i18n.t('micError');
+    showMicToast(micErrorMessage(err));
   } finally {
     mic.transcribing = false;
-    fillPlayer();
-    attachPlayerEvents();
+    // Deliberately NOT calling fillPlayer() here — it rebuilds the whole
+    // player view from a value-less <textarea> template, which would wipe
+    // the text we just filled in (or the empty draft the user was mid-typing
+    // if this fires for a stray/late recording). updateMicUI() is a targeted
+    // DOM update that only touches the mic button/duration, leaving the
+    // textarea's live value untouched.
+    updateMicUI();
   }
 }
 
@@ -748,6 +820,7 @@ function renderPlayerContent() {
     ${state.loading ? `<div class="loading-text">${esc(i18n.t('loading'))}</div>` : djBlock}
   </div>
 </div>
+<div class="mic-toast" id="mic-toast" style="display:${mic.toastMessage ? '' : 'none'}">${esc(mic.toastMessage || '')}</div>
 <div class="ask-form">
   <textarea class="ask-input" id="ask-input" rows="1"
     placeholder="${esc(i18n.t('inputPlaceholder'))}"
@@ -1087,13 +1160,10 @@ function attachPlayerEvents() {
 async function runDecision(message, { onSuccessClearInput } = {}) {
   if (state.loading) return;
 
-  // Unlock audio in the synchronous click stack — must happen before any await
-  if (!currentAudio) {
-    currentAudio = new Audio();
-    attachDjOrbPulseHooks(currentAudio);
-    currentAudio.src = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=';
-    currentAudio.play().catch(() => {});
-  }
+  // Unlock audio in the synchronous click stack — must happen before any
+  // await. No-op if already unlocked (e.g. by micPointerUp for the voice
+  // auto-send path — see ensureAudioUnlocked).
+  ensureAudioUnlocked();
 
   state.loading = true;
   state.error = null;
