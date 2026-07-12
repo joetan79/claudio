@@ -1,11 +1,21 @@
+// Structured-JSON tasks (like DJ decisions) don't need deep reasoning, so we
+// dial effort down by default. Only sent to models confirmed to accept
+// output_config.effort — Sonnet 4.5, Haiku 4.5, and dated/legacy ids reject
+// it with a 400, so this must stay an allowlist, not a blocklist.
+const ANTHROPIC_EFFORT = process.env.ANTHROPIC_EFFORT ?? 'low';
+const EFFORT_CAPABLE_MODEL_RE = /^claude-(opus-4-[5-8]|sonnet-4-6|sonnet-5|fable-5|mythos-5)$/;
+
 async function callAnthropic({ apiKey, model, system, messages }) {
+  const useEffort = ANTHROPIC_EFFORT && ANTHROPIC_EFFORT !== 'off' && EFFORT_CAPABLE_MODEL_RE.test(model);
   const body = JSON.stringify({
     model,
     max_tokens: 4096,
     ...(system ? { system } : {}),
+    ...(useEffort ? { output_config: { effort: ANTHROPIC_EFFORT } } : {}),
     messages,
   });
 
+  const t0 = Date.now();
   let response;
   const retryDelays = [3000, 8000, 15000];
   for (let attempt = 0; attempt < 4; attempt++) {
@@ -28,10 +38,12 @@ async function callAnthropic({ apiKey, model, system, messages }) {
 
   if (!response.ok) {
     const err = await response.text();
+    console.log(`[timing] anthropic_call_ms=${Date.now() - t0} model=${model} effort=${useEffort ? ANTHROPIC_EFFORT : 'n/a'} status=${response.status}(error)`);
     throw Object.assign(new Error(`Anthropic API error: ${response.status} ${err}`), { status: response.status });
   }
 
   const data = await response.json();
+  console.log(`[timing] anthropic_call_ms=${Date.now() - t0} model=${model} effort=${useEffort ? ANTHROPIC_EFFORT : 'n/a'} in_tok=${data.usage?.input_tokens ?? 0} out_tok=${data.usage?.output_tokens ?? 0}`);
   const textBlock = data.content?.find(b => b.type === 'text');
   return {
     text: textBlock?.text ?? '',

@@ -20,6 +20,7 @@ router.get('/song-url/:id', async (req, res) => {
 router.use(requireAuth);
 
 router.post('/decide', async (req, res) => {
+  const tRequestStart = Date.now();
   const uid = req.user.uid;
   const { message, weather, mood } = req.body ?? {};
 
@@ -39,6 +40,7 @@ router.post('/decide', async (req, res) => {
   };
 
   let decision;
+  const tAiStart = Date.now();
   try {
     decision = await djDecision(uid, message, context);
   } catch (e) {
@@ -46,29 +48,33 @@ router.post('/decide', async (req, res) => {
       return res.status(e.status || 401).json({ error: e.message, code: e.code });
     throw e;
   }
+  console.log(`[timing] dj_decision_ms=${Date.now() - tAiStart}`);
 
-  // TTS runs in parallel with NCM lookup + YouTube resolution.
+  // TTS is started the instant `say` is known and runs in parallel with the
+  // *entire* song-resolution chain below (NCM lookup → YouTube resolution →
+  // fallback retry), not just the NCM step — it's only joined at the end.
   // NCM first (best-effort) → normalized name+artist becomes the YouTube query.
   // YT Music is the source of truth for display metadata when it resolves the song.
   // All songs' candidates are checked for embeddability in as few batched Data API
   // calls as possible (resolveSongVideos), rather than one call per song.
-  let audioUrl, playWithUrls;
+  const tTtsStart = Date.now();
+  const audioUrlPromise = synthesize(decision.say, { uid, voiceRef: resolveVoiceRefForUser(uid) });
+  audioUrlPromise.catch(() => {}); // observed early so a later throw below can't cause an unhandled rejection
+
+  let playWithUrls;
   try {
     const songs = decision.play || [];
-    let ncmResults;
-    [audioUrl, ncmResults] = await Promise.all([
-      synthesize(decision.say, { uid, voiceRef: resolveVoiceRefForUser(uid) }).catch(e => {
-        if (e.code === 'OWN_KEY_INVALID') throw e;
-        return null;
-      }),
-      Promise.all(songs.map(song => resolveSong(song.query).catch(() => null))),
-    ]);
+    const tNcmStart = Date.now();
+    const ncmResults = await Promise.all(songs.map(song => resolveSong(song.query).catch(() => null)));
+    console.log(`[timing] ncm_ms=${Date.now() - tNcmStart}`);
 
     const ytQueries = songs.map((song, i) => {
       const ncm = ncmResults[i];
       return ncm ? `${ncm.name} ${ncm.artist}` : song.query;
     });
+    const tYtStart = Date.now();
     const ytResults = await resolveSongVideos(ytQueries);
+    console.log(`[timing] yt_resolve_ms=${Date.now() - tYtStart}`);
 
     playWithUrls = songs.map((song, i) => {
       const ncm = ncmResults[i];
@@ -86,11 +92,11 @@ router.post('/decide', async (req, res) => {
       return { ...song, query, song_name, artist, ncm, yt };
     });
   } catch (e) {
-    if (e.code === 'OWN_KEY_INVALID') return res.status(e.status || 401).json({ error: e.message, code: 'OWN_KEY_INVALID' });
     throw e;
   }
 
   // Retry YouTube for songs missing videoId using artist/mood alternative queries
+  const tFallbackStart = Date.now();
   const play = await Promise.all(
     playWithUrls.map(async (song) => {
       if (song.yt?.videoId) return song;
@@ -108,6 +114,16 @@ router.post('/decide', async (req, res) => {
       return song;
     })
   );
+  console.log(`[timing] yt_fallback_retry_ms=${Date.now() - tFallbackStart} missing=${playWithUrls.filter(s => !s.yt?.videoId).length}`);
+
+  let audioUrl;
+  try {
+    audioUrl = await audioUrlPromise;
+  } catch (e) {
+    if (e.code === 'OWN_KEY_INVALID') return res.status(e.status || 401).json({ error: e.message, code: 'OWN_KEY_INVALID' });
+    throw e;
+  }
+  console.log(`[timing] tts_join_ms=${Date.now() - tTtsStart} (elapsed since TTS started, includes wait for song resolution)`);
 
   const result = { ...decision, audioUrl: audioUrl ?? null, play };
 
@@ -115,6 +131,7 @@ router.post('/decide', async (req, res) => {
     'INSERT INTO memory (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at'
   ).run('last_decision', JSON.stringify(result), Date.now());
 
+  console.log(`[timing] decide_total_ms=${Date.now() - tRequestStart}`);
   res.json(result);
 });
 

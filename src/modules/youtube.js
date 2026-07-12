@@ -77,6 +77,7 @@ function cacheSet(videoId, value) {
 // endpoint. Fails open (treats ids as embeddable) when the key is missing or the
 // call errors, so a Data API outage never blocks a decision.
 export async function checkEmbeddableBatch(videoIds) {
+  const t0 = Date.now();
   const uniqueIds = [...new Set(videoIds.filter(Boolean))];
   const result = new Map();
   if (!uniqueIds.length) return result;
@@ -87,7 +88,10 @@ export async function checkEmbeddableBatch(videoIds) {
     if (cached !== undefined) result.set(id, cached);
     else uncached.push(id);
   }
-  if (!uncached.length) return result;
+  if (!uncached.length) {
+    console.log(`[timing] embed_check_ms=${Date.now() - t0} ids=${uniqueIds.length} uncached=0 (all cached)`);
+    return result;
+  }
 
   if (!YOUTUBE_API_KEY) {
     console.warn(`[youtube] YOUTUBE_API_KEY not configured, skipping embeddability check for ${uncached.length} video(s)`);
@@ -130,6 +134,7 @@ export async function checkEmbeddableBatch(videoIds) {
     }
   }
 
+  console.log(`[timing] embed_check_ms=${Date.now() - t0} ids=${uniqueIds.length} uncached=${uncached.length}`);
   return result;
 }
 
@@ -229,15 +234,20 @@ async function resolveTier(candidatesPerSong, winners, queries, tierLabel) {
 // Resolves one videoId per query, batching every tier's Data API embeddability
 // checks across the whole decision (all songs at once) to minimize quota usage.
 export async function resolveSongVideos(queries) {
+  const tTotal = Date.now();
   const n = queries.length;
   const winners = new Array(n).fill(null);
 
+  let t = Date.now();
   const tier1 = await Promise.all(queries.map(q => searchYTMusic(q).catch(() => [])));
+  console.log(`[timing] yt_tier1_search_ms=${Date.now() - t} songs=${n}`);
   await resolveTier(tier1, winners, queries, 'ytmusic');
 
   const needTier2 = winners.map((w, i) => (w ? -1 : i)).filter(i => i !== -1);
   if (needTier2.length) {
+    t = Date.now();
     const tier2Results = await Promise.all(needTier2.map(i => searchYouTubeInnertube(queries[i]).catch(() => [])));
+    console.log(`[timing] yt_tier2_search_ms=${Date.now() - t} songs=${needTier2.length}`);
     const tier2 = new Array(n).fill(null).map(() => []);
     needTier2.forEach((songIdx, k) => { tier2[songIdx] = tier2Results[k]; });
     await resolveTier(tier2, winners, queries, 'search');
@@ -245,13 +255,16 @@ export async function resolveSongVideos(queries) {
 
   const needTier3 = winners.map((w, i) => (w ? -1 : i)).filter(i => i !== -1);
   if (needTier3.length) {
+    t = Date.now();
     const tier3Results = await Promise.all(needTier3.map(i => searchYouTubeYtsr(queries[i]).catch(() => null)));
+    console.log(`[timing] yt_tier3_search_ms=${Date.now() - t} songs=${needTier3.length}`);
     needTier3.forEach((songIdx, k) => {
       winners[songIdx] = tier3Results[k];
       console.log(`[youtube] ytsr "${queries[songIdx]}": selected=${winners[songIdx]?.videoId ?? 'none'} (unchecked fallback)`);
     });
   }
 
+  console.log(`[timing] yt_resolve_total_ms=${Date.now() - tTotal} songs=${n}`);
   return winners;
 }
 

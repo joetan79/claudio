@@ -38,8 +38,12 @@ export async function synthesize(text, options = {}) {
   const hash = hashText(text, ref);
   const filePath = path.join(CACHE_DIR, `${hash}.mp3`);
 
-  if (fs.existsSync(filePath)) return `/api/tts/${hash}.mp3`;
+  if (fs.existsSync(filePath)) {
+    console.log(`[timing] tts_ms=0 (cache hit) chars=${text.length}`);
+    return `/api/tts/${hash}.mp3`;
+  }
 
+  const t0 = Date.now();
   try {
     const res = await fetch('https://api.fish.audio/v1/tts', {
       method: 'POST',
@@ -57,6 +61,7 @@ export async function synthesize(text, options = {}) {
 
     if (!res.ok) {
       console.error('TTS error:', res.status, await res.text());
+      console.log(`[timing] tts_ms=${Date.now() - t0} chars=${text.length} status=${res.status}(error)`);
       if (ownKey && (res.status === 401 || res.status === 403)) {
         throw Object.assign(new Error('Your API Key is invalid. Please check your key in Profile > API Keys.'), {
           code: 'OWN_KEY_INVALID',
@@ -69,10 +74,12 @@ export async function synthesize(text, options = {}) {
     const buffer = await res.arrayBuffer();
     fs.writeFileSync(filePath, Buffer.from(buffer));
     recordUsage({ uid, type: 'tts', chars: text.length, ownKey });
+    console.log(`[timing] tts_ms=${Date.now() - t0} chars=${text.length}`);
     return `/api/tts/${hash}.mp3`;
   } catch (e) {
     if (e.code === 'OWN_KEY_INVALID') throw e;
     console.error('TTS failed:', e.message);
+    console.log(`[timing] tts_ms=${Date.now() - t0} chars=${text.length} status=error(${e.message})`);
     return null;
   }
 }
