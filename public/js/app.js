@@ -110,6 +110,7 @@ async function micPointerDown(e) {
   if (mic.transcribing || mic.recording || mic.starting) return;
 
   if (!micSupported()) {
+    mlog('[mic] unsupported', 'getUserMedia=' + !!navigator.mediaDevices?.getUserMedia, 'MediaRecorder=' + !!window.MediaRecorder);
     state.error = i18n.t('micNotSupported');
     fillPlayer();
     attachPlayerEvents();
@@ -118,9 +119,29 @@ async function micPointerDown(e) {
 
   mic.pressStartTs = Date.now();
   mic.starting = true;
+
+  // Stage 1: permission + stream acquisition. Kept in its own try/catch so a
+  // getUserMedia rejection (permission denied, no mic, etc.) is never
+  // conflated with a MediaRecorder construction/start failure below — they
+  // need different user-facing messages and different fixes.
+  let stream;
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    mic.stream = stream;
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (err) {
+    mic.starting = false;
+    mlog('[mic] getUserMedia failed', `${err.name}: ${err.message}`);
+    console.error('mic permission error:', err);
+    state.error = i18n.t('micPermissionDenied');
+    fillPlayer();
+    attachPlayerEvents();
+    return;
+  }
+  mic.stream = stream;
+
+  // Stage 2: MediaRecorder construction + start. Separate from stage 1 so a
+  // codec/constructor failure surfaces as "recorder error", not "permission
+  // denied" — the two have historically been conflated into one catch block.
+  try {
     mic.mimeType = pickMicMimeType();
     const recorder = mic.mimeType ? new MediaRecorder(stream, { mimeType: mic.mimeType }) : new MediaRecorder(stream);
     mic.recorder = recorder;
@@ -128,6 +149,7 @@ async function micPointerDown(e) {
     recorder.ondataavailable = ev => { if (ev.data?.size) mic.chunks.push(ev.data); };
     recorder.onstop = handleMicStop;
     recorder.start();
+    mlog('[mic] recording started', `requestedMimeType=${mic.mimeType || '(default)'}`, `recorder.mimeType=${recorder.mimeType || '(none)'}`);
 
     mic.recording = true;
     mic.starting = false;
@@ -138,8 +160,11 @@ async function micPointerDown(e) {
     mic.autoStopId = setTimeout(stopMicRecording, MIC_MAX_DURATION_MS);
   } catch (err) {
     mic.starting = false;
-    console.error('mic permission error:', err);
-    state.error = i18n.t('micPermissionDenied');
+    mlog('[mic] MediaRecorder start failed', `${err.name}: ${err.message}`);
+    console.error('mic recorder error:', err);
+    stream.getTracks().forEach(t => t.stop());
+    mic.stream = null;
+    state.error = i18n.t('micRecorderError');
     fillPlayer();
     attachPlayerEvents();
   }
@@ -172,10 +197,19 @@ function stopMicRecording() {
 }
 
 async function handleMicStop() {
-  const blob = new Blob(mic.chunks, { type: mic.mimeType || 'audio/webm' });
+  // Prefer the recorder's own reported mimeType over the one we requested —
+  // some browsers/WebViews silently pick a different codec than asked for,
+  // and the Blob's type is what becomes the upload's Content-Type header.
+  const actualMimeType = mic.recorder?.mimeType || mic.mimeType || 'audio/webm';
+  const blob = new Blob(mic.chunks, { type: actualMimeType });
+  mlog('[mic] recording stopped', `requestedMimeType=${mic.mimeType || '(default)'}`, `recorderMimeType=${mic.recorder?.mimeType || '(n/a)'}`, `blob.type=${blob.type}`, `blob.size=${blob.size}`, `chunks=${mic.chunks.length}`);
   mic.chunks = [];
   mic.toggleMode = false;
-  if (!blob.size) { updateMicUI(); return; }
+  if (!blob.size) {
+    mlog('[mic] empty blob — nothing to upload');
+    updateMicUI();
+    return;
+  }
 
   mic.transcribing = true;
   updateMicUI();
@@ -189,7 +223,8 @@ async function handleMicStop() {
       input.focus();
     }
   } catch (err) {
-    console.error('transcribe failed:', err);
+    console.error('transcribe failed:', 'stage=' + (err.stage || 'unknown'), err);
+    mlog('[mic] transcribe failed', `stage=${err.stage || 'unknown'}`, `status=${err.status ?? 'n/a'}`, err.message);
     state.error = err.message || i18n.t('micError');
   } finally {
     mic.transcribing = false;

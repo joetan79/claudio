@@ -9,7 +9,9 @@ import { searchYouTube, resolveSongVideos } from '../modules/youtube.js';
 import { resolveVoiceRefForUser } from '../modules/settings.js';
 
 const router = Router();
-const parseAudioBody = raw({ type: 'audio/*', limit: '2mb' });
+// Accept 'application/octet-stream' too — some WebViews/browsers report a
+// generic or empty Content-Type on the recorded blob rather than 'audio/*'.
+const parseAudioBody = raw({ type: ['audio/*', 'application/octet-stream'], limit: '2mb' });
 
 // No auth — used by <audio> elements to refresh expired NCM links
 router.get('/song-url/:id', async (req, res) => {

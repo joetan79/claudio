@@ -61,18 +61,34 @@ const api = {
     return this.request('POST', '/api/radio/played', { song_name, artist, song_id: song_id || null });
   },
   async transcribe(blob) {
-    const headers = { 'Content-Type': blob.type || 'audio/webm' };
+    const contentType = blob.type || 'audio/webm';
+    const headers = { 'Content-Type': contentType };
     const token = this.getToken();
     if (token) headers['Authorization'] = `Bearer ${token}`;
+    mlog('[asr] upload start', `contentType=${contentType}`, `size=${blob.size}`);
+
     let res;
     try {
       res = await fetch('/api/radio/transcribe', { method: 'POST', headers, body: blob });
     } catch (err) {
-      mlog('fetch error: ' + err.message);
-      throw err;
+      mlog('[asr] network error', `${err.name}: ${err.message}`);
+      throw Object.assign(new Error(err.message || 'Network error'), { stage: 'network' });
     }
-    const data = await res.json();
-    if (!res.ok) throw Object.assign(new Error(data.error || 'Request failed'), { status: res.status, code: data.code });
+    mlog('[asr] response received', `status=${res.status}`);
+
+    let data;
+    try {
+      data = await res.json();
+    } catch (err) {
+      mlog('[asr] response parse error', err.message);
+      throw Object.assign(new Error('Invalid server response'), { stage: 'parse', status: res.status });
+    }
+
+    if (!res.ok) {
+      mlog('[asr] server error', `status=${res.status}`, `error=${data.error}`);
+      throw Object.assign(new Error(data.error || 'Request failed'), { status: res.status, code: data.code, stage: 'server' });
+    }
+    mlog('[asr] success', `text_len=${(data.text || '').length}`, `language=${data.language}`);
     return data;
   },
 

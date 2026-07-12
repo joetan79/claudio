@@ -108,6 +108,7 @@ const LANGS = {
     micPermissionDenied: 'Microphone access was denied. Please enable it in your browser/app settings to use voice input.',
     micNotSupported: 'Voice input is not supported on this device/browser.',
     micError: 'Voice recognition failed. Please try again or type instead.',
+    micRecorderError: 'Could not start recording on this device. Please try again or type instead.',
   },
   zh: {
     appName: 'Claudio',
@@ -218,6 +219,7 @@ const LANGS = {
     micPermissionDenied: '麦克风权限被拒绝，请在浏览器/App 设置中开启麦克风权限后再试。',
     micNotSupported: '当前设备/浏览器不支持语音输入。',
     micError: '语音识别失败，请重试或改用文字输入。',
+    micRecorderError: '当前设备无法开始录音，请重试或改用文字输入。',
   },
 };
 
