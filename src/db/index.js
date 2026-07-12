@@ -77,6 +77,10 @@ export function getSystemDb() {
   try { systemDb.exec(`ALTER TABLE users ADD COLUMN own_ai_provider TEXT DEFAULT 'anthropic'`); } catch {}
   try { systemDb.exec(`ALTER TABLE users ADD COLUMN own_ai_model TEXT DEFAULT NULL`); } catch {}
 
+  // Add prompt-cache usage columns to existing DBs (no-op on new ones)
+  try { systemDb.exec(`ALTER TABLE usage ADD COLUMN cache_creation_input_tokens INTEGER DEFAULT 0`); } catch {}
+  try { systemDb.exec(`ALTER TABLE usage ADD COLUMN cache_read_input_tokens INTEGER DEFAULT 0`); } catch {}
+
   // Seed default DJ voice config on first start
   const voicesRow = systemDb.prepare(`SELECT value FROM settings WHERE key = 'dj_voices'`).get();
   if (!voicesRow) {

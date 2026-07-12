@@ -43,18 +43,25 @@ async function callAnthropic({ apiKey, model, system, messages }) {
   }
 
   const data = await response.json();
-  console.log(`[timing] anthropic_call_ms=${Date.now() - t0} model=${model} effort=${useEffort ? ANTHROPIC_EFFORT : 'n/a'} in_tok=${data.usage?.input_tokens ?? 0} out_tok=${data.usage?.output_tokens ?? 0}`);
+  console.log(`[timing] anthropic_call_ms=${Date.now() - t0} model=${model} effort=${useEffort ? ANTHROPIC_EFFORT : 'n/a'} in_tok=${data.usage?.input_tokens ?? 0} out_tok=${data.usage?.output_tokens ?? 0} cache_creation=${data.usage?.cache_creation_input_tokens ?? 0} cache_read=${data.usage?.cache_read_input_tokens ?? 0}`);
   const textBlock = data.content?.find(b => b.type === 'text');
   return {
     text: textBlock?.text ?? '',
     usage: {
       input_tokens: data.usage?.input_tokens ?? 0,
       output_tokens: data.usage?.output_tokens ?? 0,
+      cache_creation_input_tokens: data.usage?.cache_creation_input_tokens ?? 0,
+      cache_read_input_tokens: data.usage?.cache_read_input_tokens ?? 0,
     },
   };
 }
 
 async function callOpenRouter({ apiKey, model, system, messages }) {
+  // `system` may be a plain string or an Anthropic-style content-block array
+  // (with cache_control on the static block). OpenRouter forwards content
+  // blocks as-is to Anthropic-backed models — cache_control passes through
+  // and takes effect there; on non-Anthropic models the field is simply an
+  // unrecognized extra property and is ignored, no error.
   const orMessages = system ? [{ role: 'system', content: system }, ...messages] : messages;
 
   const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
@@ -77,6 +84,8 @@ async function callOpenRouter({ apiKey, model, system, messages }) {
     usage: {
       input_tokens: data.usage?.prompt_tokens ?? 0,
       output_tokens: data.usage?.completion_tokens ?? 0,
+      cache_creation_input_tokens: data.usage?.cache_creation_input_tokens ?? 0,
+      cache_read_input_tokens: data.usage?.cache_read_input_tokens ?? data.usage?.prompt_tokens_details?.cached_tokens ?? 0,
     },
   };
 }

@@ -42,12 +42,18 @@ router.get('/usage/summary', (req, res) => {
   // Driven by `usage`, not `users` — a user LEFT JOIN would silently drop usage
   // rows belonging to since-deleted accounts, while /usage/daily (which reads
   // `usage` directly) would still count them, making the two charts disagree.
+  // cache_creation/cache_read are raw token counts from Anthropic's prompt-cache
+  // usage fields — NOT cost-adjusted. Cache reads bill at ~0.1x normal input
+  // cost and cache writes at ~1.25x; that multiplier is intentionally not
+  // applied here, so these columns are token counts, not comparable $ cost.
   const rows = db.prepare(`
     SELECT
       us.uid AS uid,
       COALESCE(u.username, '(deleted user)') AS username,
       SUM(CASE WHEN us.type = 'claude' THEN us.input_tokens ELSE 0 END) AS claude_input,
       SUM(CASE WHEN us.type = 'claude' THEN us.output_tokens ELSE 0 END) AS claude_output,
+      SUM(CASE WHEN us.type = 'claude' THEN us.cache_creation_input_tokens ELSE 0 END) AS claude_cache_creation,
+      SUM(CASE WHEN us.type = 'claude' THEN us.cache_read_input_tokens ELSE 0 END) AS claude_cache_read,
       SUM(CASE WHEN us.type = 'tts' THEN us.chars ELSE 0 END) AS tts_chars,
       SUM(CASE WHEN us.own_key = 1 THEN 1 ELSE 0 END) AS own_key_calls,
       COUNT(*) AS total_calls
@@ -64,10 +70,14 @@ router.get('/usage/daily', (req, res) => {
   const days = Math.max(1, Math.min(365, parseInt(req.query.days, 10) || 30));
   const since = Date.now() - days * 24 * 60 * 60 * 1000;
   const db = getSystemDb();
+  // claude_cache_read/claude_cache_creation are raw token counts (see the
+  // billing-multiplier note on /usage/summary above) — not cost-adjusted.
   const rows = db.prepare(`
     SELECT
       date(ts / 1000, 'unixepoch', 'localtime') AS date,
       COALESCE(SUM(CASE WHEN type = 'claude' THEN input_tokens + output_tokens ELSE 0 END), 0) AS claude_tokens,
+      COALESCE(SUM(CASE WHEN type = 'claude' THEN cache_creation_input_tokens ELSE 0 END), 0) AS claude_cache_creation,
+      COALESCE(SUM(CASE WHEN type = 'claude' THEN cache_read_input_tokens ELSE 0 END), 0) AS claude_cache_read,
       COALESCE(SUM(CASE WHEN type = 'tts' THEN chars ELSE 0 END), 0) AS tts_chars
     FROM usage
     WHERE ts >= ?
