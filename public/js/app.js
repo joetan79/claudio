@@ -59,7 +59,6 @@ const MIC_HOLD_THRESHOLD_MS = 300; // press-release shorter than this = "click" 
 const MIC_MAX_DURATION_MS = 60000; // hard cap, mirrors the server's own limit
 const MIC_SVG = '<svg viewBox="0 0 24 24" stroke="currentColor" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 11a7 7 0 0 1-14 0"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="8" y1="22" x2="16" y2="22"/></svg>';
 
-const MIC_AUTOSEND_DELAY_MS = 300; // let the user see the recognized text before it's sent
 const MIC_TOAST_DURATION_MS = 3000;
 
 const mic = {
@@ -274,21 +273,17 @@ async function handleMicStop() {
       return;
     }
 
-    // Fill the input so the user sees what was recognized, then auto-send
-    // shortly after — same runDecision() call the manual "Tell Claudio"
-    // click uses, so TTS unlock / video-id resolution / error handling all
-    // go through the one existing path, nothing bypassed or duplicated.
+    // Fill the input so the user sees what was recognized and can edit it,
+    // then leave sending to the user via the manual "Tell Claudio" button.
     const input = document.getElementById('ask-input');
     if (input) {
       input.value = text;
       input.style.height = 'auto';
       input.style.height = Math.min(input.scrollHeight, 120) + 'px';
       input.focus();
+      input.setSelectionRange(input.value.length, input.value.length);
     }
-    mlog('[mic] auto-send scheduled', `text="${text.slice(0, 60)}"`);
-    setTimeout(() => {
-      runDecision(text, { onSuccessClearInput: document.getElementById('ask-input') });
-    }, MIC_AUTOSEND_DELAY_MS);
+    mlog('[mic] transcription filled', `text="${text.slice(0, 60)}"`);
   } catch (err) {
     console.error('transcribe failed:', 'stage=' + (err.stage || 'unknown'), err);
     mlog('[mic] transcribe failed', `stage=${err.stage || 'unknown'}`, `status=${err.status ?? 'n/a'}`, err.message);
