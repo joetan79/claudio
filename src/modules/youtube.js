@@ -9,6 +9,19 @@ const EMBED_CACHE_LIMIT = 500;
 const DATA_API_TIMEOUT_MS = 4000;
 const DATA_API_BATCH_SIZE = 50;
 const YOUTUBE_API_KEY = process.env.YOUTUBE_API_KEY;
+// Neither ytsr (HTML scraping) nor youtubei.js's internal search have a
+// built-in timeout, so an occasional slow/hanging call can silently consume
+// the entire per-song resolution budget (Phase 8F) before any of our own
+// between-await budget checks ever get a chance to run. Capping each
+// individual network call directly is what actually bounds worst-case time.
+const SEARCH_CALL_TIMEOUT_MS = 3000;
+
+function withTimeout(promise, ms, label) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms)),
+  ]);
+}
 
 // Anti-pollution filters for the normal-search and ytsr fallback tiers only —
 // YT Music's `type: song` results are already clean and skip these.
@@ -215,7 +228,7 @@ function orderByPreference(candidates) {
 
 export async function searchYTMusic(query) {
   const yt = await getInnertube();
-  const search = await yt.music.search(query, { type: 'song' });
+  const search = await withTimeout(yt.music.search(query, { type: 'song' }), SEARCH_CALL_TIMEOUT_MS, 'ytmusic search');
   const shelves = search.contents?.filterType(YTNodes.MusicShelf) || [];
   const items = shelves.flatMap(shelf => shelf.contents || []);
   const candidates = [];
@@ -233,7 +246,7 @@ export async function searchYTMusic(query) {
 }
 
 async function searchVideosInnertube(yt, q, originalQuery) {
-  const search = await yt.search(q, { type: 'video' });
+  const search = await withTimeout(yt.search(q, { type: 'video' }), SEARCH_CALL_TIMEOUT_MS, 'video search');
   return search.results
     .filterType(YTNodes.Video)
     .filter(v => !v.is_live)
@@ -250,7 +263,7 @@ async function searchYouTubeInnertube(query) {
 }
 
 async function searchVideosYtsr(q, originalQuery) {
-  const results = await ytsr(q, { limit: 5 });
+  const results = await withTimeout(ytsr(q, { limit: 5 }), SEARCH_CALL_TIMEOUT_MS, 'ytsr search');
   return results.items
     .filter(i => i.type === 'video' && !i.isLive)
     .filter(i => passesFallbackFilters(i.title, parseDurationToSeconds(i.duration), originalQuery, i.author?.name || ''))
@@ -262,6 +275,38 @@ async function searchYouTubeYtsr(query) {
   if (!videos.length) videos = await searchVideosYtsr(`${query} audio`, query);
   if (!videos.length) return [];
   return orderByPreference(videos).slice(0, MAX_CANDIDATES).map(v => ({ ...v, source: 'ytsr' }));
+}
+
+function normalizeRequest(item) {
+  if (typeof item === 'string') return { query: item, title: item, artist: '', strict: false };
+  const title = item.title || '';
+  const artist = item.artist || '';
+  const query = item.query || `${title} ${artist}`.trim();
+  return { query, title, artist, strict: !!(title || artist) };
+}
+
+// Shared by both resolveTier (batch, multi-song) and resolveSongVideoBudgeted
+// (single-song, budget-aware) — given one song's candidates and an already-
+// fetched embeddability map, applies the correlation check (when requested)
+// and returns the winning candidate (with altIds) or null.
+function pickWinner(candidates, embedMap, request, tierLabel, doMatchCheck) {
+  if (!candidates.length) return null;
+  if (doMatchCheck && !candidateMatchesRequest(candidates[0], request)) {
+    console.warn(`[youtube] ${tierLabel} mismatch for "${request.query}": claude gave title="${request.title}" artist="${request.artist}", top candidate title="${candidates[0].title}" artist="${candidates[0].artist ?? candidates[0].channel ?? ''}" — checking next candidate`);
+  }
+  const passing = candidates.filter(c => embedMap.get(c.videoId) === true && (!doMatchCheck || candidateMatchesRequest(c, request)));
+  const skipped = candidates.length - passing.length;
+  if (!passing.length) {
+    console.log(`[youtube] ${tierLabel} "${request.query}": candidates=${candidates.length} passed=0 skipped=${skipped}, falling through`);
+    if (doMatchCheck) {
+      console.warn(`[youtube] ${tierLabel} all candidates failed correlation check for "${request.query}" (title="${request.title}" artist="${request.artist}") — falling through${tierLabel === 'ytsr' ? ' (last tier — song will be dropped)' : ''}`);
+    }
+    return null;
+  }
+  const altIds = passing.slice(0, MAX_ALT_IDS).map(c => c.videoId);
+  const winner = { ...passing[0], altIds };
+  console.log(`[youtube] ${tierLabel} "${request.query}": candidates=${candidates.length} passed=${passing.length} skipped=${skipped} selected=${winner.videoId}`);
+  return winner;
 }
 
 // Picks the first embeddable candidate (in original order) for each still-unresolved
@@ -287,25 +332,48 @@ async function resolveTier(candidatesPerSong, winners, requests, tierLabel, { ch
   candidatesPerSong.forEach((cands, i) => {
     if (winners[i] || !cands.length) return;
     const request = requests[i];
-    const doMatchCheck = checkMatch && request.strict;
-
-    if (doMatchCheck && !candidateMatchesRequest(cands[0], request)) {
-      console.warn(`[youtube] ${tierLabel} mismatch for "${request.query}": claude gave title="${request.title}" artist="${request.artist}", top candidate title="${cands[0].title}" artist="${cands[0].artist ?? cands[0].channel ?? ''}" — checking next candidate`);
-    }
-
-    const passing = cands.filter(c => embedMap.get(c.videoId) === true && (!doMatchCheck || candidateMatchesRequest(c, request)));
-    const skipped = cands.length - passing.length;
-    if (passing.length) {
-      const altIds = passing.slice(0, MAX_ALT_IDS).map(c => c.videoId);
-      winners[i] = { ...passing[0], altIds };
-      console.log(`[youtube] ${tierLabel} "${request.query}": candidates=${cands.length} passed=${passing.length} skipped=${skipped} selected=${winners[i].videoId}`);
-    } else {
-      console.log(`[youtube] ${tierLabel} "${request.query}": candidates=${cands.length} passed=0 skipped=${skipped}, falling through`);
-      if (doMatchCheck && cands.length) {
-        console.warn(`[youtube] ${tierLabel} all candidates failed correlation check for "${request.query}" (title="${request.title}" artist="${request.artist}") — falling through${tierLabel === 'ytsr' ? ' (last tier — song will be dropped)' : ''}`);
-      }
-    }
+    const winner = pickWinner(cands, embedMap, request, tierLabel, checkMatch && request.strict);
+    if (winner) winners[i] = winner;
   });
+}
+
+const DEFAULT_SONG_BUDGET_MS = 10000;
+const TIER3_MIN_REMAINING_MS = 3000;
+
+// Resolves ONE song's videoId through its own independent tier1→2→3 chain,
+// capped by an overall time budget — used by radio.js's early-exit
+// orchestration, where 7 of these race independently so a few slow/cold
+// songs can't block the response once enough others are ready. tier3 only
+// starts if there's still meaningfully more than TIER3_MIN_REMAINING_MS left;
+// otherwise the song is dropped rather than risking a last-resort search
+// that's unlikely to finish in time and unlikely to matter given over-
+// provisioning already has spare candidates.
+export async function resolveSongVideoBudgeted(item, budgetMs = DEFAULT_SONG_BUDGET_MS) {
+  const tStart = Date.now();
+  const request = normalizeRequest(item);
+  const doMatchCheck = request.strict;
+
+  const tryTier = async (candidates, tierLabel) => {
+    if (!candidates.length) return null;
+    const embedMap = await checkEmbeddableBatch(candidates.map(c => c.videoId));
+    return pickWinner(candidates, embedMap, request, tierLabel, doMatchCheck);
+  };
+
+  const tier1 = await searchYTMusic(request.query).catch(() => []);
+  let winner = await tryTier(tier1, 'ytmusic');
+  if (winner) return winner;
+
+  const tier2 = await searchYouTubeInnertube(request.query).catch(() => []);
+  winner = await tryTier(tier2, 'search');
+  if (winner) return winner;
+
+  const remaining = budgetMs - (Date.now() - tStart);
+  if (remaining <= TIER3_MIN_REMAINING_MS) {
+    console.warn(`[youtube] skipping ytsr tier for "${request.query}" — only ${remaining}ms left of ${budgetMs}ms budget (need >${TIER3_MIN_REMAINING_MS}ms)`);
+    return null;
+  }
+  const tier3 = await searchYouTubeYtsr(request.query).catch(() => []);
+  return tryTier(tier3, 'ytsr');
 }
 
 // Resolves one videoId per song, batching every tier's Data API embeddability
@@ -315,13 +383,7 @@ async function resolveTier(candidatesPerSong, winners, requests, tierLabel, { ch
 // (the primary DJ flow, where title/artist come from Claude's decision/NCM).
 export async function resolveSongVideos(items) {
   const tTotal = Date.now();
-  const requests = items.map(item => {
-    if (typeof item === 'string') return { query: item, title: item, artist: '', strict: false };
-    const title = item.title || '';
-    const artist = item.artist || '';
-    const query = item.query || `${title} ${artist}`.trim();
-    return { query, title, artist, strict: !!(title || artist) };
-  });
+  const requests = items.map(normalizeRequest);
   const n = requests.length;
   const winners = new Array(n).fill(null);
 

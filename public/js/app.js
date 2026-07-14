@@ -1175,6 +1175,7 @@ async function runDecision(message, { onSuccessClearInput } = {}) {
     console.error(err);
     if (err.code === 'OWN_KEY_INVALID') state.error = i18n.t('ownKeyInvalid');
     else if (err.code === 'AI_KEY_REQUIRED') state.error = i18n.t('aiKeyRequired');
+    else if (err.code === 'INSUFFICIENT_SONGS') state.error = i18n.t('insufficientSongs');
     else state.error = err.message || i18n.t('errorServer');
   } finally {
     state.loading = false;

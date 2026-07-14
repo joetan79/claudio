@@ -5,13 +5,171 @@ import { djDecision, getTimeOfDay, detectLang, detectProfileLang, normalizeDecid
 import { synthesize } from '../modules/tts.js';
 import { transcribe } from '../modules/asr.js';
 import { resolveSong, getSongUrl } from '../modules/ncm.js';
-import { searchYouTube, resolveSongVideos } from '../modules/youtube.js';
+import { searchYouTube, resolveSongVideoBudgeted } from '../modules/youtube.js';
 import { resolveVoiceByLang, resolveVoiceForLang, resolveVoiceForUser } from '../modules/settings.js';
 
 const router = Router();
 // Accept 'application/octet-stream' too — some WebViews/browsers report a
 // generic or empty Content-Type on the recorded blob rather than 'audio/*'.
 const parseAudioBody = raw({ type: ['audio/*', 'application/octet-stream'], limit: '2mb' });
+
+// Per-song resolution budget for /decide's early-exit orchestration below —
+// named constants so they're easy to tune without hunting through the logic.
+const SONG_BUDGET_MS = 10000;
+const TARGET_SONG_COUNT = 5;
+const MIN_ACCEPTABLE_SONGS = 3;
+const SONG_TIMED_OUT = Symbol('song-timed-out');
+
+// Resolves one song end-to-end: NCM lookup -> budgeted YT resolution ->
+// display-name assembly -> generic fallback retry if still unresolved — all
+// within one overall SONG_BUDGET_MS ceiling (a hard Promise.race — the
+// internal tier3 budget-gating in resolveSongVideoBudgeted only prevents
+// *starting* a tier unlikely to finish in time, it doesn't cap an
+// already-in-flight network call running long). Returns the finished song
+// object, or null if the song couldn't be resolved — a drop, not an error,
+// since radio.js's 7-song over-provisioning expects some drops.
+async function resolveOneSong(song, decision) {
+  const tStart = Date.now();
+  const remaining = () => SONG_BUDGET_MS - (Date.now() - tStart);
+
+  const work = (async () => {
+    const tNcm = Date.now();
+    const ncm = await resolveSong(song.query).catch(() => null);
+    const title = ncm?.name || song.title || '';
+    const artist0 = ncm?.artist || song.artist || '';
+    const query = ncm ? `${ncm.name} ${ncm.artist}` : song.query;
+    console.log(`[timing] song="${song.title}" ncm_ms=${Date.now() - tNcm}`);
+
+    const tYt = Date.now();
+    let yt = await resolveSongVideoBudgeted({ query, title, artist: artist0 }, SONG_BUDGET_MS - (Date.now() - tStart)).catch(() => null);
+    console.log(`[timing] song="${song.title}" yt_ms=${Date.now() - tYt} source=${yt?.source ?? 'none'}`);
+
+    // Double-insurance (log-only, not a filter): when the listener explicitly
+    // asked for Cantonese, a matched video whose own title reads as an
+    // explicit Mandarin version (e.g. "国语版") is a likely wrong-version
+    // pick — trusts the AI's own per-song `lang` tag as the source of truth
+    // rather than building real language detection here.
+    if (decision.request_lang === 'yue' && yt?.title && /国语|Mandarin/i.test(yt.title)) {
+      console.warn(`[radio] request_lang=yue but matched video looks Mandarin: song="${song.title}" artist="${song.artist}" matched title="${yt.title}"`);
+    }
+
+    // Display name trusts YT Music's own catalog metadata (clean, verified
+    // against the request via the correlation check in youtube.js) — but for
+    // the general-search/ytsr fallback tiers, yt.title/yt.channel are a raw
+    // video title and uploader name, which can be anything (a reposting
+    // channel's own branding, an OST clip stuffed with hashtags, episode
+    // titles, etc.). Never display those — Claude's own title/artist (or
+    // NCM's, if it matched) are clean and stay the source of truth for what's
+    // shown/stored, even though the video's own title decided the search.
+    let song_name, artist;
+    if (yt?.source === 'ytmusic' && yt.title) {
+      song_name = yt.title;
+      artist = yt.artist || '';
+    } else {
+      song_name = ncm?.name || song.title || song.query;
+      artist = ncm?.artist || song.artist || '';
+      if (yt?.title) {
+        console.log(`[radio] fallback-tier (${yt.source}) display name kept as "${song_name}" — actual video title was "${yt.title}"${yt.channel ? ` (channel: "${yt.channel}")` : ''}`);
+      }
+    }
+
+    // Generic fallback retry — only attempted if there's still meaningful
+    // budget left; a fresh search here is pointless if we're already at the ceiling.
+    if (!yt?.videoId && remaining() > 500) {
+      const mood = decision.mood || '';
+      const fallbacks = [
+        artist ? `${artist} popular song` : null,
+        artist ? `${artist} music` : null,
+        mood ? `${mood} music popular` : null,
+      ].filter(Boolean);
+      for (const q of fallbacks) {
+        if (remaining() <= 300) break;
+        const fbYt = await searchYouTube(q).catch(() => null);
+        if (fbYt?.videoId) {
+          // Same distrust of raw video titles/channels as above — only trust
+          // yt.title when it's YT Music's own clean catalog metadata, which a
+          // generic fallback query can still hit.
+          const useYtTitle = fbYt.source === 'ytmusic' && fbYt.title;
+          if (useYtTitle) {
+            song_name = fbYt.title;
+            artist = fbYt.artist || artist;
+          } else if (fbYt.title) {
+            console.log(`[radio] fallback-retry (${fbYt.source}) display name kept as "${song_name}" — actual video title was "${fbYt.title}"${fbYt.channel ? ` (channel: "${fbYt.channel}")` : ''}`);
+          }
+          yt = fbYt;
+          break;
+        }
+      }
+    }
+
+    if (!yt?.videoId) return null;
+
+    const displayQuery = artist ? `${song_name} - ${artist}` : song_name;
+    return { ...song, query: displayQuery, song_name, artist, ncm, yt };
+  })();
+
+  const timeout = new Promise(resolve => setTimeout(() => resolve(SONG_TIMED_OUT), SONG_BUDGET_MS));
+  const result = await Promise.race([work, timeout]);
+  if (result === SONG_TIMED_OUT) {
+    console.warn(`[radio] song "${song.title}" (${song.artist}) exceeded ${SONG_BUDGET_MS}ms budget — dropped`);
+    return null;
+  }
+  return result;
+}
+
+// Fires as soon as the first TARGET_SONG_COUNT songs — in the AI's priority
+// order, skipping drops — are confirmed playable, or once every song has
+// settled, whichever comes first. Still-pending songs at that point are left
+// running to their own natural conclusion; their eventual results only get
+// logged, never awaited or used (nothing after "responded" flips affects the
+// response that's already been decided).
+async function resolveSongsWithEarlyExit(songs, decision) {
+  const settled = new Array(songs.length).fill(undefined); // undefined=pending, null=dropped, object=confirmed
+  let responded = false;
+  let fireEarlyExit;
+  const earlyExit = new Promise(resolve => { fireEarlyExit = resolve; });
+
+  function computeReturnable() {
+    const confirmed = [];
+    for (let i = 0; i < settled.length; i++) {
+      if (settled[i] === undefined) break; // unknown outcome — can't safely count past this yet
+      if (settled[i] !== null) {
+        confirmed.push(settled[i]);
+        if (confirmed.length >= TARGET_SONG_COUNT) return confirmed;
+      }
+    }
+    return null;
+  }
+
+  const songPromises = songs.map((song, i) =>
+    resolveOneSong(song, decision).then(result => {
+      if (responded) {
+        console.log(`[radio] song[${i}] "${song.title}" settled after response was already decided (${result ? 'confirmed' : 'dropped'}) — logged only`);
+        return result;
+      }
+      settled[i] = result;
+      const returnable = computeReturnable();
+      if (returnable) fireEarlyExit(returnable);
+      return result;
+    })
+  );
+
+  // Fallback for when 5-in-priority-order is never reached: once every song
+  // has settled one way or another, return whatever confirmed set exists
+  // (even if under TARGET_SONG_COUNT — the caller enforces MIN_ACCEPTABLE_SONGS).
+  Promise.all(songPromises).then(() => {
+    if (!responded) fireEarlyExit(settled.filter(s => s !== null && s !== undefined));
+  });
+
+  const finalPlay = await earlyExit;
+  responded = true;
+  const stats = {
+    confirmed: settled.filter(s => s !== null && s !== undefined).length,
+    dropped: settled.filter(s => s === null).length,
+    pending: settled.filter(s => s === undefined).length,
+  };
+  return { finalPlay: finalPlay.slice(0, TARGET_SONG_COUNT), stats };
+}
 
 // No auth — used by <audio> elements to refresh expired NCM links
 router.get('/song-url/:id', async (req, res) => {
@@ -63,12 +221,8 @@ router.post('/decide', async (req, res) => {
 
     // TTS is started the instant `say` is known and runs in parallel with the
     // *entire* song-resolution chain below (NCM lookup → YouTube resolution →
-    // fallback retry), not just the NCM step — it's only joined at the end.
-    // NCM first (best-effort) → normalized name+artist becomes the YouTube query.
-    // YT Music is the source of truth for display metadata when it resolves the song.
-    // All songs' candidates are checked for embeddability in as few batched Data API
-    // calls as possible (resolveSongVideos), rather than one call per song.
-    // Voice follows the language the listener actually wrote in — same
+    // fallback retry, one independent chain per song), not just the NCM step
+    // — it's only joined at the end. Voice follows the language the listener actually wrote in — same
     // detectLang() call djDecision uses internally for the "say" language
     // instruction, on the same normalized message, so they can't disagree.
     // The listener's preferred Profile voice wins if it's tagged with that
@@ -83,116 +237,33 @@ router.post('/decide', async (req, res) => {
     // Drop non-matching candidates BEFORE spending NCM/YouTube/embed-check
     // calls on them — the 7-song over-provisioning exists partly for this.
     // Trusts the AI's own per-song `lang` tag as-is rather than independently
-    // re-verifying it (see the yue/Mandarin sanity-check log further below).
+    // re-verifying it (see the yue/Mandarin sanity-check log inside resolveOneSong).
     const requestLang = decision.request_lang || null;
     const rawSongs = decision.play || [];
     const songs = requestLang ? rawSongs.filter(s => s.lang === requestLang) : rawSongs;
     if (requestLang && songs.length < rawSongs.length) {
       console.warn(`[radio] request_lang=${requestLang}: ${rawSongs.length} candidates -> ${songs.length} after language filter`);
     }
-    if (requestLang && songs.length < 3) {
-      console.warn(`[radio] request_lang=${requestLang}: only ${songs.length} candidate(s) survived the language filter (below 3) — returning as-is`);
+    if (requestLang && songs.length < MIN_ACCEPTABLE_SONGS) {
+      console.warn(`[radio] request_lang=${requestLang}: only ${songs.length} candidate(s) survived the language filter (below ${MIN_ACCEPTABLE_SONGS}) — returning as-is`);
     }
 
-    const tNcmStart = Date.now();
-    const ncmResults = await Promise.all(songs.map(song => resolveSong(song.query).catch(() => null)));
-    console.log(`[timing] ncm_ms=${Date.now() - tNcmStart}`);
+    // Early-exit orchestration: each song runs its own independent, budgeted
+    // resolution chain (NCM -> YT tier1/2/3 -> generic fallback retry) in
+    // parallel. As soon as the first TARGET_SONG_COUNT songs — in the AI's
+    // priority order, skipping drops — are confirmed playable, this returns
+    // immediately; any still-running songs are left to finish on their own,
+    // logged only, never awaited further.
+    const tResolveStart = Date.now();
+    const { finalPlay, stats } = await resolveSongsWithEarlyExit(songs, decision);
+    console.log(`[timing] yt_resolve_ms=${Date.now() - tResolveStart} confirmed=${stats.confirmed} dropped=${stats.dropped} pending=${stats.pending} returning=${finalPlay.length}`);
 
-    const ytRequests = songs.map((song, i) => {
-      const ncm = ncmResults[i];
-      const title = ncm?.name || song.title || '';
-      const artist = ncm?.artist || song.artist || '';
-      const query = ncm ? `${ncm.name} ${ncm.artist}` : song.query;
-      return { query, title, artist };
-    });
-    const tYtStart = Date.now();
-    const ytResults = await resolveSongVideos(ytRequests);
-    console.log(`[timing] yt_resolve_ms=${Date.now() - tYtStart}`);
-
-    // Double-insurance (log-only, not a filter): when the listener explicitly
-    // asked for Cantonese, a matched video whose own title reads as an
-    // explicit Mandarin version (e.g. "国语版") is a likely wrong-version
-    // pick — same-melody dual-language releases (富士山下 vs 爱情转移-style)
-    // are hard to catch generically, so this trusts the AI's own per-song
-    // `lang` tag as the source of truth rather than building real language
-    // detection here; it just logs the suspicious case for observation.
-    if (requestLang === 'yue') {
-      songs.forEach((song, i) => {
-        const yt = ytResults[i];
-        if (yt?.title && /国语|Mandarin/i.test(yt.title)) {
-          console.warn(`[radio] request_lang=yue but matched video looks Mandarin: song="${song.title}" artist="${song.artist}" matched title="${yt.title}"`);
-        }
+    if (finalPlay.length < MIN_ACCEPTABLE_SONGS) {
+      console.warn(`[radio] decide: only ${finalPlay.length} playable song(s) found (below minimum ${MIN_ACCEPTABLE_SONGS}) — returning error`);
+      return res.status(502).json({
+        error: 'Could not find enough playable songs this time — try rephrasing your request.',
+        code: 'INSUFFICIENT_SONGS',
       });
-    }
-
-    // Display name trusts YT Music's own catalog metadata (clean, verified
-    // against the request via the correlation check in youtube.js) — but for
-    // the general-search/ytsr fallback tiers, yt.title/yt.channel are a raw
-    // video title and uploader name, which can be anything (a reposting
-    // channel's own branding, an OST clip stuffed with hashtags, episode
-    // titles, etc.). Never display those — Claude's own title/artist (or
-    // NCM's, if it matched) are clean and stay the source of truth for what's
-    // shown/stored, even though the video's own title decided the search.
-    const playWithUrls = songs.map((song, i) => {
-      const ncm = ncmResults[i];
-      const yt = ytResults[i];
-
-      let song_name, artist;
-      if (yt?.source === 'ytmusic' && yt.title) {
-        song_name = yt.title;
-        artist = yt.artist || '';
-      } else {
-        song_name = ncm?.name || song.title || song.query;
-        artist = ncm?.artist || song.artist || '';
-        if (yt?.title) {
-          console.log(`[radio] fallback-tier (${yt.source}) display name kept as "${song_name}" — actual video title was "${yt.title}"${yt.channel ? ` (channel: "${yt.channel}")` : ''}`);
-        }
-      }
-      const query = artist ? `${song_name} - ${artist}` : song_name;
-      return { ...song, query, song_name, artist, ncm, yt };
-    });
-
-    // Retry YouTube for songs missing videoId using artist/mood alternative queries
-    const tFallbackStart = Date.now();
-    const play = await Promise.all(
-      playWithUrls.map(async (song) => {
-        if (song.yt?.videoId) return song;
-        const artist = song.ncm?.artist || song.artist || '';
-        const mood = decision.mood || '';
-        const fallbacks = [
-          artist ? `${artist} popular song` : null,
-          artist ? `${artist} music` : null,
-          mood ? `${mood} music popular` : null,
-        ].filter(Boolean);
-        for (const q of fallbacks) {
-          const yt = await searchYouTube(q).catch(() => null);
-          if (yt?.videoId) {
-            // Same distrust of raw video titles/channels as the primary pass
-            // above — only trust yt.title when it's YT Music's own clean
-            // catalog metadata, which a generic fallback query can still hit.
-            const useYtTitle = yt.source === 'ytmusic' && yt.title;
-            const song_name = useYtTitle ? yt.title : song.song_name;
-            if (yt.title && !useYtTitle) {
-              console.log(`[radio] fallback-retry (${yt.source}) display name kept as "${song_name}" — actual video title was "${yt.title}"${yt.channel ? ` (channel: "${yt.channel}")` : ''}`);
-            }
-            const query = artist ? `${song_name} - ${artist}` : song_name;
-            return { ...song, yt, song_name, query };
-          }
-        }
-        return song;
-      })
-    );
-    console.log(`[timing] yt_fallback_retry_ms=${Date.now() - tFallbackStart} missing=${playWithUrls.filter(s => !s.yt?.videoId).length}`);
-
-    // Server-side "unavailable" filter: djDecision over-provisions 7
-    // candidates specifically so losing a few to failed search/embeddability
-    // checks still leaves 5 good ones — take the first 5 (in the AI's given
-    // priority order) that actually resolved to a playable videoId. Return
-    // fewer only if the pipeline genuinely couldn't find 5 (≥3 still acceptable).
-    const playableCandidates = play.filter(s => s.yt?.videoId);
-    const finalPlay = playableCandidates.slice(0, 5);
-    if (finalPlay.length < play.length) {
-      console.warn(`[radio] decide: ${play.length} candidates, ${playableCandidates.length} playable, returning ${finalPlay.length}${finalPlay.length < 5 ? ' (BELOW target of 5)' : ''}`);
     }
 
     let audioUrl;
