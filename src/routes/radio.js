@@ -1,12 +1,12 @@
 import { Router, raw } from 'express';
 import { requireAuth } from '../middleware/auth.js';
 import { getUserDb } from '../db/index.js';
-import { djDecision, getTimeOfDay, detectLang } from '../modules/claude.js';
+import { djDecision, getTimeOfDay, detectLang, detectProfileLang, normalizeDecideMessage } from '../modules/claude.js';
 import { synthesize } from '../modules/tts.js';
 import { transcribe } from '../modules/asr.js';
 import { resolveSong, getSongUrl } from '../modules/ncm.js';
 import { searchYouTube, resolveSongVideos } from '../modules/youtube.js';
-import { resolveVoiceForUser } from '../modules/settings.js';
+import { resolveVoiceByLang } from '../modules/settings.js';
 
 const router = Router();
 // Accept 'application/octet-stream' too — some WebViews/browsers report a
@@ -68,8 +68,12 @@ router.post('/decide', async (req, res) => {
     // YT Music is the source of truth for display metadata when it resolves the song.
     // All songs' candidates are checked for embeddability in as few batched Data API
     // calls as possible (resolveSongVideos), rather than one call per song.
+    // Voice follows the language the listener actually wrote in — same
+    // detectLang() call djDecision uses internally for the "say" language
+    // instruction, on the same normalized message, so they can't disagree.
     const tTtsStart = Date.now();
-    const audioUrlPromise = synthesize({ text: decision.say, uid, voice: resolveVoiceForUser(uid) });
+    const lang = detectLang(normalizeDecideMessage(message));
+    const audioUrlPromise = synthesize({ text: decision.say, uid, voice: resolveVoiceByLang(lang) });
     audioUrlPromise.catch(() => {}); // observed early so a later throw below can't cause an unhandled rejection
 
     const songs = decision.play || [];
@@ -246,7 +250,9 @@ router.post('/plan/generate', async (req, res) => {
     let decision, audioUrl;
     try {
       decision = await djDecision(uid, message, context);
-      audioUrl = await synthesize({ text: decision.say, uid, voice: resolveVoiceForUser(uid) }).catch(e => {
+      // No live listener message here (scheduler-triggered plan) — pick the
+      // voice from the user's taste profile's primary language instead.
+      audioUrl = await synthesize({ text: decision.say, uid, voice: resolveVoiceByLang(detectProfileLang(uid)) }).catch(e => {
         if (e.code === 'OWN_KEY_INVALID') throw e;
         return null;
       });

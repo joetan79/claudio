@@ -37,14 +37,18 @@ export function resolveVoice(voiceId) {
   return (voiceId && voices.find(v => v.id === voiceId)) || voices[0];
 }
 
-export function getUserVoiceId(uid) {
-  const db = getSystemDb();
-  const row = db.prepare('SELECT dj_voice FROM users WHERE id = ?').get(uid);
-  return row?.dj_voice ?? null;
-}
-
-export function resolveVoiceForUser(uid) {
-  return resolveVoice(getUserVoiceId(uid));
+// TTS voice follows the language the listener actually used, not a fixed
+// per-user preference — users.dj_voice is no longer read at runtime (column
+// kept in the schema, just unused). Falls back to the 'zh' voice when
+// nothing matches (missing lang tag, or that language has no configured voice).
+export function resolveVoiceByLang(lang) {
+  const voices = getDjVoices();
+  if (!voices.length) {
+    return process.env.FISH_TTS_VOICE
+      ? { id: null, name: null, provider: DEFAULT_PROVIDER, lang: 'zh', ref: process.env.FISH_TTS_VOICE }
+      : null;
+  }
+  return voices.find(v => v.lang === lang) || voices.find(v => v.lang === 'zh') || voices[0];
 }
 
 export function getAiSettings() {

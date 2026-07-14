@@ -161,10 +161,12 @@ router.get('/voices', (req, res) => {
   res.json({ voices: getDjVoices() });
 });
 
+const VALID_VOICE_LANGS = ['zh', 'yue', 'en'];
+
 router.put('/voices', (req, res) => {
   const { voices } = req.body ?? {};
-  if (!Array.isArray(voices) || voices.length === 0 || voices.length > 4)
-    return res.status(400).json({ error: 'voices must be an array of 1 to 4 entries' });
+  if (!Array.isArray(voices) || voices.length !== 3)
+    return res.status(400).json({ error: 'voices must be an array of exactly 3 entries, one per language (zh/yue/en)' });
 
   for (const v of voices) {
     if (!v || typeof v.id !== 'string' || !v.id.trim() ||
@@ -172,6 +174,8 @@ router.put('/voices', (req, res) => {
         typeof v.ref !== 'string' || !v.ref.trim()) {
       return res.status(400).json({ error: 'each voice needs id, name, and ref' });
     }
+    if (!VALID_VOICE_LANGS.includes(v.lang))
+      return res.status(400).json({ error: "each voice needs a lang of 'zh', 'yue', or 'en'" });
     if (v.provider !== undefined && !['fish', 'minimax'].includes(v.provider))
       return res.status(400).json({ error: "provider must be 'fish' or 'minimax'" });
     if ((v.provider === 'minimax') && !process.env.MINIMAX_API_KEY)
@@ -180,6 +184,9 @@ router.put('/voices', (req, res) => {
   const ids = new Set(voices.map(v => v.id));
   if (ids.size !== voices.length)
     return res.status(400).json({ error: 'voice ids must be unique' });
+  const langs = new Set(voices.map(v => v.lang));
+  if (langs.size !== voices.length)
+    return res.status(400).json({ error: 'each voice must have a unique lang' });
 
   setDjVoices(voices);
   res.json({ ok: true });

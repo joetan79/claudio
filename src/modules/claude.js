@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { getUserDb, getSystemDb } from '../db/index.js';
+import { getUserDb, getSystemDb, DEFAULT_TASTE_MD } from '../db/index.js';
 import { decrypt, isEncryptionEnabled } from './crypto.js';
 import { recordUsage } from './usage.js';
 import { aiComplete } from './ai.js';
@@ -51,6 +51,27 @@ export function detectLang(text) {
   const chineseChars = (text.match(/[一-鿿]/g) || []).length;
   const totalChars = text.replace(/\s/g, '').length;
   return chineseChars === 0 && totalChars > 0 ? 'en' : 'zh';
+}
+
+const DEFAULT_DECIDE_MESSAGE = 'What should I listen to now?';
+
+// Shared with radio.js so the TTS voice-language pick (detectLang on the
+// same normalized text) matches exactly what djDecision itself detects for
+// the "say" field's language instruction — not a separate, potentially
+// drifting copy of the same fallback string.
+export function normalizeDecideMessage(userMessage) {
+  return userMessage?.trim() || DEFAULT_DECIDE_MESSAGE;
+}
+
+// Used for the scheduler's auto-generated plans, which have no live listener
+// message to detect a language from — infers a "primary language" from the
+// user's taste profile instead. Falls back to 'zh' when the profile is still
+// the untouched default: an uncustomized profile has no real language
+// signal, and the boilerplate placeholder text itself happens to be English.
+export function detectProfileLang(uid) {
+  const taste = readUserFile(uid, 'taste.md');
+  if (!taste || taste === DEFAULT_TASTE_MD) return 'zh';
+  return detectLang(taste);
 }
 
 // Fully static across every user and every request — no timestamps, no
@@ -232,7 +253,7 @@ export async function djDecision(uid, userMessage, context) {
     ? `IMPORTANT: Do NOT recommend any of these recently played songs: ${recentSongs}. Recommend fresh songs the listener hasn't heard recently.`
     : '';
 
-  const message = userMessage?.trim() || "What should I listen to now?";
+  const message = normalizeDecideMessage(userMessage);
 
   // Everything below is per-user/per-request — none of it is byte-stable
   // across calls, so it stays in the user turn. The static persona/rules/

@@ -81,10 +81,16 @@ export function getSystemDb() {
   try { systemDb.exec(`ALTER TABLE usage ADD COLUMN cache_creation_input_tokens INTEGER DEFAULT 0`); } catch {}
   try { systemDb.exec(`ALTER TABLE usage ADD COLUMN cache_read_input_tokens INTEGER DEFAULT 0`); } catch {}
 
-  // Seed default DJ voice config on first start
+  // Seed default DJ voice config on first start — one voice per language;
+  // English reuses the Fish placeholder ref until an admin points it at a
+  // real English voice.
   const voicesRow = systemDb.prepare(`SELECT value FROM settings WHERE key = 'dj_voices'`).get();
   if (!voicesRow) {
-    const defaultVoices = [{ id: 'voice1', name: 'Claudio 经典', ref: process.env.FISH_TTS_VOICE || '' }];
+    const defaultVoices = [
+      { id: 'voice1', name: '中文', lang: 'zh', provider: 'fish', ref: process.env.FISH_TTS_VOICE || '' },
+      { id: 'voice2', name: '粵語', lang: 'yue', provider: 'minimax', ref: 'Cantonese_GentleLady' },
+      { id: 'voice3', name: 'English', lang: 'en', provider: 'fish', ref: process.env.FISH_TTS_VOICE || '' },
+    ];
     systemDb.prepare(`INSERT INTO settings (key, value, updated_at) VALUES ('dj_voices', ?, ?)`)
       .run(JSON.stringify(defaultVoices), Date.now());
   }

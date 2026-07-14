@@ -316,8 +316,15 @@
     <span class="usage-title">DJ Voices</span>
   </div>
   <div class="table-wrap" style="padding:18px">
-    ${[0, 1, 2, 3].map(i => `
+    <div class="section-desc" style="margin-bottom:12px;font-size:0.85rem;color:var(--muted)">One voice per language — the DJ picks whichever matches the listener's detected language automatically.</div>
+    ${['zh', 'yue', 'en'].map((defaultLang, i) => `
     <div class="voice-row" style="display:flex;gap:10px;margin-bottom:10px;align-items:center">
+      <select class="voice-lang" id="voice-lang-${i}"
+        style="flex:0.6;background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:9px 12px;font-size:0.88rem">
+        <option value="zh" ${(voicesData?.voices?.[i]?.lang || defaultLang) === 'zh' ? 'selected' : ''}>中文 (zh)</option>
+        <option value="yue" ${(voicesData?.voices?.[i]?.lang || defaultLang) === 'yue' ? 'selected' : ''}>粵語 (yue)</option>
+        <option value="en" ${(voicesData?.voices?.[i]?.lang || defaultLang) === 'en' ? 'selected' : ''}>English (en)</option>
+      </select>
       <input type="text" class="voice-name" id="voice-name-${i}" placeholder="Name"
         value="${(voicesData?.voices?.[i]?.name || '').replace(/"/g, '&quot;')}"
         style="flex:1;background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:9px 12px;font-size:0.88rem" />
@@ -407,13 +414,15 @@
   }
 
   async function saveVoices() {
-    const rows = [0, 1, 2, 3].map(i => ({
+    const rows = [0, 1, 2].map(i => ({
+      lang: document.getElementById(`voice-lang-${i}`).value,
       name: document.getElementById(`voice-name-${i}`).value.trim(),
       provider: document.getElementById(`voice-provider-${i}`).value,
       ref: document.getElementById(`voice-ref-${i}`).value.trim(),
-    })).filter(r => r.name && r.ref);
-    if (rows.length === 0) { alert('At least one voice (name + reference_id) is required.'); return; }
-    const voices = rows.map((r, idx) => ({ id: `voice${idx + 1}`, name: r.name, provider: r.provider, ref: r.ref }));
+    }));
+    if (rows.some(r => !r.name || !r.ref)) { alert('All 3 voices need a name and reference_id.'); return; }
+    if (new Set(rows.map(r => r.lang)).size !== 3) { alert('Each voice must have a different language (zh/yue/en).'); return; }
+    const voices = rows.map((r, idx) => ({ id: `voice${idx + 1}`, name: r.name, lang: r.lang, provider: r.provider, ref: r.ref }));
     const btn = document.getElementById('btn-save-voices');
     btn.disabled = true;
     try {

@@ -312,7 +312,7 @@ const state = {
   profileData: {
     taste: '', routines: '', history: [],
     keys: { key: null, provider: 'anthropic', model: '' },
-    voices: { voices: [], current: null },
+    voices: { voices: [] },
   },
   onboarding: null,
 };
@@ -953,7 +953,7 @@ function renderProfileTab() {
 </div>`;
   }
   if (state.profileTab === 'voice') {
-    const v = state.profileData.voices || { voices: [], current: null };
+    const v = state.profileData.voices || { voices: [] };
     return `
 <div>
   <div class="section-title">${esc(i18n.t('djVoice'))}</div>
@@ -961,14 +961,10 @@ function renderProfileTab() {
   <div class="voice-list">
     ${v.voices.map(voice => `
     <div class="voice-option">
-      <label class="voice-radio-label">
-        <input type="radio" name="dj-voice" value="${esc(voice.id)}" ${voice.id === v.current ? 'checked' : ''} />
-        <span>${esc(voice.name)}</span>
-      </label>
+      <span>${esc(voice.name)}</span>
       <button class="btn-preview" data-voice="${esc(voice.id)}">${esc(i18n.t('preview'))}</button>
     </div>`).join('')}
   </div>
-  <span class="save-confirm" id="voice-confirm" style="display:none">${esc(i18n.t('saved'))}</span>
 </div>`;
   }
   // history
@@ -1293,23 +1289,6 @@ function attachProfileEvents() {
     }
   });
 
-  document.querySelectorAll('input[name="dj-voice"]').forEach(radio => {
-    radio.addEventListener('change', async () => {
-      const voiceId = radio.value;
-      try {
-        await api.saveVoice(voiceId);
-        state.profileData.voices.current = voiceId;
-        const confirm = document.getElementById('voice-confirm');
-        if (confirm) {
-          confirm.style.display = 'inline-block';
-          setTimeout(() => { confirm.style.display = 'none'; }, 2000);
-        }
-      } catch (err) {
-        alert(err.message || i18n.t('errorServer'));
-      }
-    });
-  });
-
   document.querySelectorAll('.btn-preview').forEach(btn => {
     btn.addEventListener('click', async () => {
       const voiceId = btn.dataset.voice;
@@ -1406,7 +1385,7 @@ async function loadKeys() {
 async function loadVoices() {
   try {
     const data = await api.getVoices();
-    state.profileData.voices = { voices: data.voices || [], current: data.current || null };
+    state.profileData.voices = { voices: data.voices || [] };
   } catch (err) {
     console.error(err);
   }

@@ -81,17 +81,28 @@ export async function transcribe(audioBuffer, options = {}) {
   console.log(`[timing] asr_transcode_ms=${Date.now() - tTranscode} in_bytes=${audioBuffer.length} out_bytes=${wavBuffer.length}`);
 
   const t0 = Date.now();
-  const form = new FormData();
-  form.append('audio', new Blob([wavBuffer], { type: 'audio/wav' }), 'audio.wav');
-  form.append('ignore_timestamps', 'true');
-
-  let res;
-  try {
-    res = await fetch('https://api.fish.audio/v1/asr', {
+  const callFishAsr = () => {
+    const form = new FormData();
+    form.append('audio', new Blob([wavBuffer], { type: 'audio/wav' }), 'audio.wav');
+    form.append('ignore_timestamps', 'true');
+    return fetch('https://api.fish.audio/v1/asr', {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${apiKey}` },
       body: form,
     });
+  };
+
+  let res;
+  try {
+    res = await callFishAsr();
+    // Fish's ASR occasionally returns a transient 5xx ("upstream ASR service
+    // is unavailable") under momentary load — one retry clears most of these
+    // without forcing the user to re-record. 4xx (bad audio, auth) is not retried.
+    if (!res.ok && res.status >= 500 && res.status < 600) {
+      console.warn(`[asr] Fish ASR returned ${res.status}, retrying once`);
+      await new Promise(r => setTimeout(r, 400));
+      res = await callFishAsr();
+    }
   } catch (e) {
     console.log(`[timing] asr_ms=${Date.now() - t0} status=error(${e.message})`);
     throw Object.assign(new Error('Voice recognition request failed.'), { status: 502 });
