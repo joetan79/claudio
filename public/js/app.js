@@ -798,7 +798,7 @@ function renderPlayerContent() {
     <div class="now-playing-controls">
       <button class="np-ctrl-btn np-ctrl-prev" id="np-btn-prev" disabled>◀◀</button>
       <div class="np-playpause-wrap">
-        <div class="np-freq-ring" id="np-freq-ring">${buildFreqRingHtml()}</div>
+        <div class="np-freq-ring ${state.loading ? 'thinking' : ''}" id="np-freq-ring">${buildFreqRingHtml()}</div>
         <button class="np-ctrl-btn np-ctrl-playpause" id="np-btn-playpause">▶</button>
       </div>
       <button class="np-ctrl-btn np-ctrl-next" id="np-btn-next" disabled>▶▶</button>
@@ -812,16 +812,18 @@ function renderPlayerContent() {
   </div>
   <div class="now-playing-panel" id="now-playing-panel">
     ${state.error ? `<div class="dj-error">${esc(state.error)}</div>` : ''}
-    ${state.loading ? `<div class="loading-text">${esc(i18n.t('loading'))}</div>` : djBlock}
+    ${state.loading ? `<div class="dj-card">
+      <div class="loading-text" id="loading-phrase-text">${esc(currentLoadingPhrase())}</div>
+    </div>` : djBlock}
   </div>
 </div>
 <div class="mic-toast" id="mic-toast" style="display:${mic.toastMessage ? '' : 'none'}">${esc(mic.toastMessage || '')}</div>
 <div class="ask-form">
   <textarea class="ask-input" id="ask-input" rows="1"
-    placeholder="${esc(i18n.t('inputPlaceholder'))}"
+    placeholder="${esc(i18n.t('inputPlaceholder'))}" ${state.loading ? 'disabled' : ''}
   ></textarea>
   <button class="btn-mic ${mic.recording ? 'recording' : ''} ${mic.transcribing ? 'transcribing' : ''}" id="btn-mic"
-    type="button" title="${esc(mic.transcribing ? i18n.t('transcribing') : (mic.recording ? i18n.t('micRecording') : i18n.t('micHint')))}">
+    type="button" ${state.loading ? 'disabled' : ''} title="${esc(mic.transcribing ? i18n.t('transcribing') : (mic.recording ? i18n.t('micRecording') : i18n.t('micHint')))}">
     ${MIC_SVG}
     <span class="mic-duration" id="mic-duration" style="display:${mic.recording ? '' : 'none'}">${formatMicDuration()}</span>
   </button>
@@ -1164,6 +1166,7 @@ async function runDecision(message, { onSuccessClearInput } = {}) {
   state.error = null;
   fillPlayer();
   attachPlayerEvents();
+  startLoadingPhraseRotation();
   try {
     const decision = await api.decide(message);
     if (decision.play?.some(s => !s.yt?.videoId)) {
@@ -1176,8 +1179,10 @@ async function runDecision(message, { onSuccessClearInput } = {}) {
     if (err.code === 'OWN_KEY_INVALID') state.error = i18n.t('ownKeyInvalid');
     else if (err.code === 'AI_KEY_REQUIRED') state.error = i18n.t('aiKeyRequired');
     else if (err.code === 'INSUFFICIENT_SONGS') state.error = i18n.t('insufficientSongs');
+    else if (err.code === 'TIMEOUT') state.error = i18n.t('decideTimeout');
     else state.error = err.message || i18n.t('errorServer');
   } finally {
+    stopLoadingPhraseRotation();
     state.loading = false;
     resetPlayerState();
     fillPlayer();
@@ -1683,6 +1688,38 @@ function buildFreqRingHtml() {
       `</div>`;
   }
   return html;
+}
+
+// ── Decision-wait "picking songs" state (Phase 8G) ──────────────────────────
+// Rotating DJ-flavored copy while /api/radio/decide is in flight, so the wait
+// reads as "Claudio is working on it" rather than a generic spinner. Driven
+// by setInterval directly against the DOM node (not a full re-render) so it
+// doesn't fight with fillPlayer()'s own rebuilds.
+const LOADING_PHRASE_INTERVAL_MS = 2500;
+let loadingPhraseIndex = 0;
+let loadingPhraseTimer = null;
+
+function currentLoadingPhrase() {
+  const phrases = i18n.t('loadingPhrases');
+  if (!Array.isArray(phrases) || !phrases.length) return i18n.t('loading');
+  return phrases[loadingPhraseIndex % phrases.length];
+}
+
+function startLoadingPhraseRotation() {
+  stopLoadingPhraseRotation();
+  loadingPhraseIndex = 0;
+  loadingPhraseTimer = setInterval(() => {
+    loadingPhraseIndex++;
+    const el = document.getElementById('loading-phrase-text');
+    if (el) el.textContent = currentLoadingPhrase();
+  }, LOADING_PHRASE_INTERVAL_MS);
+}
+
+function stopLoadingPhraseRotation() {
+  if (loadingPhraseTimer) {
+    clearInterval(loadingPhraseTimer);
+    loadingPhraseTimer = null;
+  }
 }
 
 function updateFreqRingActive() {

@@ -3,7 +3,7 @@ const api = {
   setToken(t) { localStorage.setItem('claudio_token', t); },
   clearToken() { localStorage.removeItem('claudio_token'); },
 
-  async request(method, path, body) {
+  async request(method, path, body, { timeoutMs } = {}) {
     const headers = { 'Content-Type': 'application/json' };
     const token = this.getToken();
     if (token) headers['Authorization'] = `Bearer ${token}`;
@@ -13,9 +13,13 @@ const api = {
         method,
         headers,
         body: body !== undefined ? JSON.stringify(body) : undefined,
+        ...(timeoutMs ? { signal: AbortSignal.timeout(timeoutMs) } : {}),
       });
     } catch (err) {
       mlog('fetch error: ' + err.message);
+      if (err.name === 'TimeoutError' || err.name === 'AbortError') {
+        throw Object.assign(new Error('Request timed out'), { code: 'TIMEOUT' });
+      }
       throw err;
     }
     const data = await res.json();
@@ -52,7 +56,7 @@ const api = {
 
   // Radio
   decide(message) {
-    return this.request('POST', '/api/radio/decide', { message });
+    return this.request('POST', '/api/radio/decide', { message }, { timeoutMs: 45000 });
   },
   now() {
     return this.request('GET', '/api/radio/now');

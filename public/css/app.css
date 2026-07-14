@@ -1106,6 +1106,20 @@ textarea.profile-textarea:focus { border-color: var(--accent); }
   75%  { transform: scaleY(1.7); }
   100% { transform: scaleY(0.5); }
 }
+/* "thinking" — a decision is in flight (Phase 8G). A slow, uniform
+   whole-ring rotation, deliberately calmer/more mechanical than .active's
+   energetic per-bar bounce, so the two read as distinct at a glance: this
+   one means "working on it", not "music is playing". */
+.np-freq-ring.thinking {
+  animation: freqThinkingSpin 3s linear infinite;
+}
+.np-freq-ring.thinking .np-freq-bar-inner {
+  opacity: 0.5;
+}
+@keyframes freqThinkingSpin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
 
 /* The independently-scrolling region (dj-card + queue) — flex:1 fills
    whatever height .now-playing-region isn't using (more of it once
