@@ -6,7 +6,7 @@ import { synthesize } from '../modules/tts.js';
 import { transcribe } from '../modules/asr.js';
 import { resolveSong, getSongUrl } from '../modules/ncm.js';
 import { searchYouTube, resolveSongVideos } from '../modules/youtube.js';
-import { resolveVoiceByLang } from '../modules/settings.js';
+import { resolveVoiceByLang, resolveVoiceForLang, resolveVoiceForUser } from '../modules/settings.js';
 
 const router = Router();
 // Accept 'application/octet-stream' too — some WebViews/browsers report a
@@ -71,9 +71,11 @@ router.post('/decide', async (req, res) => {
     // Voice follows the language the listener actually wrote in — same
     // detectLang() call djDecision uses internally for the "say" language
     // instruction, on the same normalized message, so they can't disagree.
+    // The listener's preferred Profile voice wins if it's tagged with that
+    // same language (resolveVoiceForLang); otherwise plain language routing.
     const tTtsStart = Date.now();
     const lang = detectLang(normalizeDecideMessage(message));
-    const audioUrlPromise = synthesize({ text: decision.say, uid, voice: resolveVoiceByLang(lang) });
+    const audioUrlPromise = synthesize({ text: decision.say, uid, voice: resolveVoiceForLang(lang, uid) });
     audioUrlPromise.catch(() => {}); // observed early so a later throw below can't cause an unhandled rejection
 
     const songs = decision.play || [];
@@ -140,6 +142,17 @@ router.post('/decide', async (req, res) => {
     );
     console.log(`[timing] yt_fallback_retry_ms=${Date.now() - tFallbackStart} missing=${playWithUrls.filter(s => !s.yt?.videoId).length}`);
 
+    // Server-side "unavailable" filter: djDecision over-provisions 7
+    // candidates specifically so losing a few to failed search/embeddability
+    // checks still leaves 5 good ones — take the first 5 (in the AI's given
+    // priority order) that actually resolved to a playable videoId. Return
+    // fewer only if the pipeline genuinely couldn't find 5 (≥3 still acceptable).
+    const playableCandidates = play.filter(s => s.yt?.videoId);
+    const finalPlay = playableCandidates.slice(0, 5);
+    if (finalPlay.length < play.length) {
+      console.warn(`[radio] decide: ${play.length} candidates, ${playableCandidates.length} playable, returning ${finalPlay.length}${finalPlay.length < 5 ? ' (BELOW target of 5)' : ''}`);
+    }
+
     let audioUrl;
     try {
       audioUrl = await audioUrlPromise;
@@ -149,7 +162,7 @@ router.post('/decide', async (req, res) => {
     }
     console.log(`[timing] tts_join_ms=${Date.now() - tTtsStart} (elapsed since TTS started, includes wait for song resolution)`);
 
-    const result = { ...decision, audioUrl: audioUrl ?? null, play };
+    const result = { ...decision, audioUrl: audioUrl ?? null, play: finalPlay };
 
     db.prepare(
       'INSERT INTO memory (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at'
@@ -250,9 +263,11 @@ router.post('/plan/generate', async (req, res) => {
     let decision, audioUrl;
     try {
       decision = await djDecision(uid, message, context);
-      // No live listener message here (scheduler-triggered plan) — pick the
-      // voice from the user's taste profile's primary language instead.
-      audioUrl = await synthesize({ text: decision.say, uid, voice: resolveVoiceByLang(detectProfileLang(uid)) }).catch(e => {
+      // No live listener message here (scheduler-triggered plan) — use the
+      // listener's preferred Profile voice if they've set one; only fall
+      // back to inferring a language from their taste profile when they haven't.
+      const planVoice = resolveVoiceForUser(uid) || resolveVoiceByLang(detectProfileLang(uid));
+      audioUrl = await synthesize({ text: decision.say, uid, voice: planVoice }).catch(e => {
         if (e.code === 'OWN_KEY_INVALID') throw e;
         return null;
       });
@@ -261,7 +276,10 @@ router.post('/plan/generate', async (req, res) => {
         return res.status(e.status || 401).json({ error: e.message, code: e.code });
       throw e;
     }
-    const result = { ...decision, audioUrl: audioUrl ?? null };
+    // This route doesn't run the YT/NCM resolution pipeline (unlike /decide),
+    // so there's no availability filter to apply here — just trim djDecision's
+    // 7 over-provisioned candidates back down to the 5 the plan is meant to hold.
+    const result = { ...decision, play: (decision.play || []).slice(0, 5), audioUrl: audioUrl ?? null };
 
     const db = getUserDb(uid);
     db.prepare(

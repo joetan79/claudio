@@ -5,7 +5,7 @@ import { fileURLToPath } from 'url';
 import { requireAuth } from '../middleware/auth.js';
 import { getSystemDb, getUserDb, DEFAULT_TASTE_MD } from '../db/index.js';
 import { encrypt, decrypt, isEncryptionEnabled, maskKey } from '../modules/crypto.js';
-import { getDjVoices } from '../modules/settings.js';
+import { getDjVoices, getUserVoiceId } from '../modules/settings.js';
 import { synthesize } from '../modules/tts.js';
 import { generateOnboardingProfile } from '../modules/claude.js';
 
@@ -114,13 +114,28 @@ router.put('/keys', (req, res) => {
   res.json({ ok: true });
 });
 
-// DJ voice is no longer user-selectable — the decision route picks it
-// automatically from the language the listener writes in (see radio.js).
-// This just lists the configured language voices for the Profile page's
-// preview buttons.
+// The DJ still auto-routes voice by the language the listener writes in
+// (radio.js) — but when the listener's preferred voice matches that
+// language, it wins over plain language routing. This lists the configured
+// language voices plus the listener's current preference for the Profile UI.
 router.get('/voices', (req, res) => {
   const voices = getDjVoices().map(v => ({ id: v.id, name: v.name, lang: v.lang }));
-  res.json({ voices });
+  const current = getUserVoiceId(req.user.uid) || null;
+  res.json({ voices, current });
+});
+
+router.put('/voice', (req, res) => {
+  const { voice } = req.body ?? {};
+  if (!voice || typeof voice !== 'string')
+    return res.status(400).json({ error: 'voice is required' });
+
+  const voices = getDjVoices();
+  if (!voices.some(v => v.id === voice))
+    return res.status(400).json({ error: 'unknown voice id' });
+
+  const db = getSystemDb();
+  db.prepare('UPDATE users SET dj_voice = ? WHERE id = ?').run(voice, req.user.uid);
+  res.json({ ok: true });
 });
 
 router.post('/voice/preview', async (req, res) => {

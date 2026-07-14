@@ -37,10 +37,14 @@ export function resolveVoice(voiceId) {
   return (voiceId && voices.find(v => v.id === voiceId)) || voices[0];
 }
 
-// TTS voice follows the language the listener actually used, not a fixed
-// per-user preference — users.dj_voice is no longer read at runtime (column
-// kept in the schema, just unused). Falls back to the 'zh' voice when
-// nothing matches (missing lang tag, or that language has no configured voice).
+export function getUserVoiceId(uid) {
+  const db = getSystemDb();
+  const row = db.prepare('SELECT dj_voice FROM users WHERE id = ?').get(uid);
+  return row?.dj_voice ?? null;
+}
+
+// Base resolver: whichever configured voice is tagged with this language,
+// falling back to 'zh', falling back to the first voice.
 export function resolveVoiceByLang(lang) {
   const voices = getDjVoices();
   if (!voices.length) {
@@ -49,6 +53,31 @@ export function resolveVoiceByLang(lang) {
       : null;
   }
   return voices.find(v => v.lang === lang) || voices.find(v => v.lang === 'zh') || voices[0];
+}
+
+// Used by /decide, where the listener's message language IS known. The
+// listener's chosen Profile voice (users.dj_voice) wins when it matches
+// this language — lets a future multi-voice-per-language roster actually
+// differ by user choice, not just by language. Otherwise falls back to
+// plain by-language routing.
+export function resolveVoiceForLang(lang, uid) {
+  const voices = getDjVoices();
+  if (!voices.length) return resolveVoiceByLang(lang);
+  const preferredId = uid ? getUserVoiceId(uid) : null;
+  const preferred = preferredId && voices.find(v => v.id === preferredId);
+  if (preferred && preferred.lang === lang) return preferred;
+  return resolveVoiceByLang(lang);
+}
+
+// Used for scheduler-triggered plans, which have no live listener message to
+// detect a language from — the listener's chosen Profile voice wins outright
+// when set. Returns null when no preference is set; the caller falls back to
+// resolveVoiceByLang(detectProfileLang(uid)) in that case.
+export function resolveVoiceForUser(uid) {
+  const voices = getDjVoices();
+  if (!voices.length) return null;
+  const preferredId = getUserVoiceId(uid);
+  return (preferredId && voices.find(v => v.id === preferredId)) || null;
 }
 
 export function getAiSettings() {

@@ -1,7 +1,7 @@
 import { getSystemDb, getUserDb } from '../db/index.js';
 import { djDecision, detectProfileLang } from './claude.js';
 import { synthesize } from './tts.js';
-import { resolveVoiceByLang } from './settings.js';
+import { resolveVoiceByLang, resolveVoiceForUser } from './settings.js';
 
 function getNextTriggerMs(hour) {
   const now = new Date();
@@ -20,15 +20,20 @@ async function generateDailyPlan(timeLabel, message, timeOfDay) {
     try {
       const context = { weather: '', timeOfDay, recentPlays: [], currentMood: '' };
       const decision = await djDecision(user.id, message, context);
+      // No YT/NCM resolution happens for scheduler plans — just trim
+      // djDecision's 7 over-provisioned candidates back to 5.
+      const trimmedDecision = { ...decision, play: (decision.play || []).slice(0, 5) };
 
       const userDb = getUserDb(user.id);
       userDb.prepare(
         'INSERT OR REPLACE INTO memory (key, value, updated_at) VALUES (?, ?, ?)'
-      ).run(`plan_${timeLabel}`, JSON.stringify(decision), Date.now());
+      ).run(`plan_${timeLabel}`, JSON.stringify(trimmedDecision), Date.now());
 
-      // No live listener message for a scheduler-triggered plan — pick the
-      // voice from the user's taste profile's primary language instead.
-      if (decision.say) await synthesize({ text: decision.say, uid: user.id, voice: resolveVoiceByLang(detectProfileLang(user.id)) });
+      // No live listener message for a scheduler-triggered plan — use the
+      // listener's preferred Profile voice if they've set one; only fall
+      // back to inferring a language from their taste profile when they haven't.
+      const voice = resolveVoiceForUser(user.id) || resolveVoiceByLang(detectProfileLang(user.id));
+      if (decision.say) await synthesize({ text: decision.say, uid: user.id, voice });
 
       console.log(`[Scheduler] Done for ${user.username}`);
     } catch (e) {
