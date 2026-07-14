@@ -14,7 +14,22 @@ const YOUTUBE_API_KEY = process.env.YOUTUBE_API_KEY;
 // YT Music's `type: song` results are already clean and skip these.
 const MIN_FALLBACK_DURATION_SEC = 90;
 const MAX_FALLBACK_DURATION_SEC = 600;
-const BLOCKED_FALLBACK_TITLE = /gameplay|实况|攻略|直播|教程|tutorial|reaction|合集|串烧|mix|全集|8d|倍速|sped\s*up|slowed/i;
+// live/伴奏/instrumental/karaoke are never a valid "the song" recommendation
+// regardless of tier — mirrors BLOCKED_TITLE's non-cover terms (cover/翻唱
+// are deliberately NOT blocked here, since a legitimate requested cover
+// often only resolves via a plain video-title search, unlike YT Music's
+// tier1 catalog search where a clean "song" entry should exist instead).
+const BLOCKED_FALLBACK_TITLE = /gameplay|实况|攻略|直播|教程|tutorial|reaction|合集|串烧|mix|全集|8d|倍速|sped\s*up|slowed|花絮|幕后|\blive\b|现场|伴奏|instrumental|karaoke/i;
+// Reposting/carrier channels — lyric-video mills, subtitle groups, cover
+// compilations, "music sharing" aggregators — routinely rehost real songs
+// under garbled titles and their own branding as the uploader name. A
+// legitimate artist/label channel never matches these.
+const BLOCKED_FALLBACK_CHANNEL = /lyrics?|歌词|字幕组?|翻唱|cover|音乐分享|精选|合集|remix|reup|repost|搬运/i;
+const HASHTAG_STUFFING_THRESHOLD = 2;
+
+function countHashtags(text) {
+  return ((text || '').match(/#/g) || []).length;
+}
 
 function parseDurationToSeconds(text) {
   if (!text) return null;
@@ -91,9 +106,11 @@ function candidateMatchesRequest(candidate, request) {
     artistMatches(candidate.artist ?? candidate.channel ?? '', request.artist);
 }
 
-function passesFallbackFilters(title, durationSeconds, query) {
+function passesFallbackFilters(title, durationSeconds, query, channel) {
   if (durationSeconds == null || durationSeconds < MIN_FALLBACK_DURATION_SEC || durationSeconds > MAX_FALLBACK_DURATION_SEC) return false;
   if (BLOCKED_FALLBACK_TITLE.test(title)) return false;
+  if (BLOCKED_FALLBACK_CHANNEL.test(channel || '')) return false;
+  if (countHashtags(title) >= HASHTAG_STUFFING_THRESHOLD) return false;
   if (!titleMatchesQuery(title, query)) return false;
   return true;
 }
@@ -196,10 +213,6 @@ function orderByPreference(candidates) {
     .map(s => s.v);
 }
 
-function pickBest(candidates) {
-  return orderByPreference(candidates)[0] || candidates[0];
-}
-
 export async function searchYTMusic(query) {
   const yt = await getInnertube();
   const search = await yt.music.search(query, { type: 'song' });
@@ -224,7 +237,7 @@ async function searchVideosInnertube(yt, q, originalQuery) {
   return search.results
     .filterType(YTNodes.Video)
     .filter(v => !v.is_live)
-    .filter(v => passesFallbackFilters(v.title?.text || '', v.duration?.seconds ?? null, originalQuery))
+    .filter(v => passesFallbackFilters(v.title?.text || '', v.duration?.seconds ?? null, originalQuery, v.author?.name || ''))
     .map(v => ({ videoId: v.video_id, title: v.title?.text || '', channel: v.author?.name || '' }));
 }
 
@@ -240,25 +253,27 @@ async function searchVideosYtsr(q, originalQuery) {
   const results = await ytsr(q, { limit: 5 });
   return results.items
     .filter(i => i.type === 'video' && !i.isLive)
-    .filter(i => passesFallbackFilters(i.title, parseDurationToSeconds(i.duration), originalQuery))
+    .filter(i => passesFallbackFilters(i.title, parseDurationToSeconds(i.duration), originalQuery, i.author?.name || ''))
     .map(i => ({ videoId: i.id, title: i.title, channel: i.author?.name || '' }));
 }
 
 async function searchYouTubeYtsr(query) {
   let videos = await searchVideosYtsr(`${query} official audio`, query);
   if (!videos.length) videos = await searchVideosYtsr(`${query} audio`, query);
-  if (!videos.length) return null;
-  const best = pickBest(videos);
-  return { ...best, source: 'ytsr', altIds: [best.videoId] };
+  if (!videos.length) return [];
+  return orderByPreference(videos).slice(0, MAX_CANDIDATES).map(v => ({ ...v, source: 'ytsr' }));
 }
 
 // Picks the first embeddable candidate (in original order) for each still-unresolved
 // song, using ONE batched Data API call across every candidate in this tier.
 // checkMatch applies the title/artist correlation check on top of embeddability —
-// used for both the YT Music and general-search tiers (the latter falls back to
-// channel name as an artist proxy — noisier, but the YT Music tier's embeddability
-// pass rate is near zero in practice, so general search resolves most songs and
-// needs the same verification). The ytsr tier stays unchecked, as documented below.
+// used for all three tiers (ytmusic/search/ytsr). ytsr used to be a genuinely
+// unchecked last resort, but that let obscure/cold songs — which fail the
+// stricter tier1/tier2 checks and fall all the way through — resolve to a
+// completely unrelated video with zero verification. Now that resolveSongVideos
+// is always called with more candidates than are actually needed (radio.js
+// over-provisions 7 songs for 5 slots), a song that fails the check at every
+// tier simply drops instead of silently playing the wrong thing.
 async function resolveTier(candidatesPerSong, winners, requests, tierLabel, { checkMatch = false } = {}) {
   const allIds = [];
   candidatesPerSong.forEach((cands, i) => {
@@ -287,7 +302,7 @@ async function resolveTier(candidatesPerSong, winners, requests, tierLabel, { ch
     } else {
       console.log(`[youtube] ${tierLabel} "${request.query}": candidates=${cands.length} passed=0 skipped=${skipped}, falling through`);
       if (doMatchCheck && cands.length) {
-        console.warn(`[youtube] ${tierLabel} all candidates failed correlation check for "${request.query}" (title="${request.title}" artist="${request.artist}") — falling through to general search`);
+        console.warn(`[youtube] ${tierLabel} all candidates failed correlation check for "${request.query}" (title="${request.title}" artist="${request.artist}") — falling through${tierLabel === 'ytsr' ? ' (last tier — song will be dropped)' : ''}`);
       }
     }
   });
@@ -332,12 +347,11 @@ export async function resolveSongVideos(items) {
   const needTier3 = winners.map((w, i) => (w ? -1 : i)).filter(i => i !== -1);
   if (needTier3.length) {
     t = Date.now();
-    const tier3Results = await Promise.all(needTier3.map(i => searchYouTubeYtsr(requests[i].query).catch(() => null)));
+    const tier3Results = await Promise.all(needTier3.map(i => searchYouTubeYtsr(requests[i].query).catch(() => [])));
     console.log(`[timing] yt_tier3_search_ms=${Date.now() - t} songs=${needTier3.length}`);
-    needTier3.forEach((songIdx, k) => {
-      winners[songIdx] = tier3Results[k];
-      console.log(`[youtube] ytsr "${requests[songIdx].query}": selected=${winners[songIdx]?.videoId ?? 'none'} (unchecked fallback)`);
-    });
+    const tier3 = new Array(n).fill(null).map(() => []);
+    needTier3.forEach((songIdx, k) => { tier3[songIdx] = tier3Results[k]; });
+    await resolveTier(tier3, winners, requests, 'ytsr', { checkMatch: true });
   }
 
   console.log(`[timing] yt_resolve_total_ms=${Date.now() - tTotal} songs=${n}`);

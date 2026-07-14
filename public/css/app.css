@@ -1000,11 +1000,19 @@ textarea.profile-textarea:focus { border-color: var(--accent); }
   font-weight: 700;
   color: var(--text);
   word-break: break-word;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .now-playing-artist {
   font-size: 0.88rem;
   color: var(--muted);
   margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .np-fade-in { animation: npFadeIn 0.3s ease; }
 @keyframes npFadeIn {

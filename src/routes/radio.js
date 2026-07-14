@@ -78,7 +78,22 @@ router.post('/decide', async (req, res) => {
     const audioUrlPromise = synthesize({ text: decision.say, uid, voice: resolveVoiceForLang(lang, uid) });
     audioUrlPromise.catch(() => {}); // observed early so a later throw below can't cause an unhandled rejection
 
-    const songs = decision.play || [];
+    // Language hard-constraint server-side filter: request_lang is set when
+    // the listener explicitly asked for a specific sung language this turn.
+    // Drop non-matching candidates BEFORE spending NCM/YouTube/embed-check
+    // calls on them — the 7-song over-provisioning exists partly for this.
+    // Trusts the AI's own per-song `lang` tag as-is rather than independently
+    // re-verifying it (see the yue/Mandarin sanity-check log further below).
+    const requestLang = decision.request_lang || null;
+    const rawSongs = decision.play || [];
+    const songs = requestLang ? rawSongs.filter(s => s.lang === requestLang) : rawSongs;
+    if (requestLang && songs.length < rawSongs.length) {
+      console.warn(`[radio] request_lang=${requestLang}: ${rawSongs.length} candidates -> ${songs.length} after language filter`);
+    }
+    if (requestLang && songs.length < 3) {
+      console.warn(`[radio] request_lang=${requestLang}: only ${songs.length} candidate(s) survived the language filter (below 3) — returning as-is`);
+    }
+
     const tNcmStart = Date.now();
     const ncmResults = await Promise.all(songs.map(song => resolveSong(song.query).catch(() => null)));
     console.log(`[timing] ncm_ms=${Date.now() - tNcmStart}`);
@@ -94,20 +109,44 @@ router.post('/decide', async (req, res) => {
     const ytResults = await resolveSongVideos(ytRequests);
     console.log(`[timing] yt_resolve_ms=${Date.now() - tYtStart}`);
 
-    // Display name always follows the actual matched video's metadata, never
-    // Claude's original guess — otherwise what's shown/stored can name a
-    // different song than what's actually embedded and played.
+    // Double-insurance (log-only, not a filter): when the listener explicitly
+    // asked for Cantonese, a matched video whose own title reads as an
+    // explicit Mandarin version (e.g. "国语版") is a likely wrong-version
+    // pick — same-melody dual-language releases (富士山下 vs 爱情转移-style)
+    // are hard to catch generically, so this trusts the AI's own per-song
+    // `lang` tag as the source of truth rather than building real language
+    // detection here; it just logs the suspicious case for observation.
+    if (requestLang === 'yue') {
+      songs.forEach((song, i) => {
+        const yt = ytResults[i];
+        if (yt?.title && /国语|Mandarin/i.test(yt.title)) {
+          console.warn(`[radio] request_lang=yue but matched video looks Mandarin: song="${song.title}" artist="${song.artist}" matched title="${yt.title}"`);
+        }
+      });
+    }
+
+    // Display name trusts YT Music's own catalog metadata (clean, verified
+    // against the request via the correlation check in youtube.js) — but for
+    // the general-search/ytsr fallback tiers, yt.title/yt.channel are a raw
+    // video title and uploader name, which can be anything (a reposting
+    // channel's own branding, an OST clip stuffed with hashtags, episode
+    // titles, etc.). Never display those — Claude's own title/artist (or
+    // NCM's, if it matched) are clean and stay the source of truth for what's
+    // shown/stored, even though the video's own title decided the search.
     const playWithUrls = songs.map((song, i) => {
       const ncm = ncmResults[i];
       const yt = ytResults[i];
 
       let song_name, artist;
-      if (yt?.title) {
+      if (yt?.source === 'ytmusic' && yt.title) {
         song_name = yt.title;
-        artist = yt.source === 'ytmusic' ? (yt.artist || '') : (ncm?.artist || song.artist || '');
+        artist = yt.artist || '';
       } else {
         song_name = ncm?.name || song.title || song.query;
         artist = ncm?.artist || song.artist || '';
+        if (yt?.title) {
+          console.log(`[radio] fallback-tier (${yt.source}) display name kept as "${song_name}" — actual video title was "${yt.title}"${yt.channel ? ` (channel: "${yt.channel}")` : ''}`);
+        }
       }
       const query = artist ? `${song_name} - ${artist}` : song_name;
       return { ...song, query, song_name, artist, ncm, yt };
@@ -128,11 +167,14 @@ router.post('/decide', async (req, res) => {
         for (const q of fallbacks) {
           const yt = await searchYouTube(q).catch(() => null);
           if (yt?.videoId) {
-            // The fallback query is generic (e.g. "<artist> popular song"), so it
-            // can land on a different track than the original request — recompute
-            // the displayed name from the actual match rather than keeping the
-            // stale song_name/query computed against the discarded lookup.
-            const song_name = yt.title || song.song_name;
+            // Same distrust of raw video titles/channels as the primary pass
+            // above — only trust yt.title when it's YT Music's own clean
+            // catalog metadata, which a generic fallback query can still hit.
+            const useYtTitle = yt.source === 'ytmusic' && yt.title;
+            const song_name = useYtTitle ? yt.title : song.song_name;
+            if (yt.title && !useYtTitle) {
+              console.log(`[radio] fallback-retry (${yt.source}) display name kept as "${song_name}" — actual video title was "${yt.title}"${yt.channel ? ` (channel: "${yt.channel}")` : ''}`);
+            }
             const query = artist ? `${song_name} - ${artist}` : song_name;
             return { ...song, yt, song_name, query };
           }
