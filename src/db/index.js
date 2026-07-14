@@ -145,6 +145,13 @@ export function getUserDb(uid) {
   if (userDbs.has(uid)) return userDbs.get(uid);
 
   const dbPath = path.join(DATA_DIR, 'users', uid, 'state.db');
+  // Accounts created outside the normal registration flow (e.g. the
+  // auto-seeded admin) never get a user directory — better-sqlite3 throws
+  // synchronously if it doesn't exist. Self-heal with the same idempotent
+  // function registration uses, rather than letting every caller guard against it.
+  if (!fs.existsSync(dbPath)) {
+    initUserDir(uid);
+  }
   const db = new Database(dbPath);
   db.pragma('journal_mode = WAL');
   userDbs.set(uid, db);

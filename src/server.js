@@ -13,6 +13,20 @@ import { isEncryptionEnabled } from './modules/crypto.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
+// Defense-in-depth backstop: an uncaught exception or unhandled rejection
+// anywhere (e.g. a route handler's synchronous throw that no try/catch
+// wraps) must never take the whole process down and every other user's
+// in-flight request with it. Log and keep running — the request that
+// triggered it is handled (or left to time out) at the route level;
+// individual routes are still responsible for returning a clean error
+// response, this is only the last resort against a process-wide crash.
+process.on('uncaughtException', (err) => {
+  console.error('[uncaughtException]', err);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[unhandledRejection]', reason);
+});
+
 const app = express();
 const PORT = process.env.PORT || 3001;
 const HOST = process.env.HOST || '127.0.0.1';
