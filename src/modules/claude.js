@@ -40,8 +40,14 @@ function normalizeSongs(result) {
   return result;
 }
 
+// Characters that are near-exclusively Cantonese written particles/grammar
+// words (嘅/咁/唔/係/喺/咗/嚟/畀) — Mandarin text essentially never uses these
+// in this role, so a single hit is a reliable Cantonese signal.
+const CANTONESE_CHARS = /[嘅咁唔係喺咗嚟畀]/;
+
 export function detectLang(text) {
   if (!text || !text.trim()) return 'zh';
+  if (CANTONESE_CHARS.test(text)) return 'yue';
   const chineseChars = (text.match(/[一-鿿]/g) || []).length;
   const totalChars = text.replace(/\s/g, '').length;
   return chineseChars === 0 && totalChars > 0 ? 'en' : 'zh';
@@ -140,9 +146,10 @@ Example 7 — 只描述需求（流行歌/新歌），无指定歌手，中文�
 say 示例："最近这一年流行榜上挺能打的几首给你凑一组——最后加了一首你可能还没听过的新面孔，风格跟你常听的那挂挺搭，试试合不合胃口。"`,
 
   // ⑥ Output format + language rules
-  `Respond with this exact JSON structure:\n{\n  "say": "What Claudio says (1-3 sentences, plain conversational text only, no XML or SSML tags)",\n  "play": [\n    {"query": "song title artist", "title": "exact song title", "artist": "the artist actually performing THIS version (for covers: the cover artist, NEVER the original singer)", "reason": "why this song fits right now"}\n  ],\n  "mood": "detected mood keyword",\n  "segue": "brief transition thought for next song"\n}\nplay array MUST contain EXACTLY 5 songs. No more, no less.\n\nSong selection rules:\n- Never repeat songs from the recently played list above\n- Watch the recent-plays list for artists that keep recurring across the last several picks; deprioritize them and explore new artists from the same taste graph instead\n- Unless the listener names a specific artist this turn, the same artist may appear at most 2 times in one 5-song list, and the list must cover at least 3 different artists — treat the listener's favorite artists as seeds to branch into stylistically similar artists, not as the only options\n- If the listener specified a hard constraint (artist name / language / era / "latest" / genre), at least 4 of the 5 songs MUST strictly satisfy it; the remaining song may be a related pick but its reason must explain why it's included\n- If the listener asks for "pop" / "流行歌" / new music, default to songs released within the last 3 years unless they explicitly ask for classics/old songs; if you're not sure of a song's release year, don't pick it\n- Every song must be a real, officially released studio recording or a real official cover — never a live version, game-footage audio, mashup, or DJ remix, and never a fabricated title or a title/artist pairing you're not confident about\n- Cover versions are allowed, but "artist" must be the cover performer, not the original singer — mention the original singer in "say" if relevant, never in "artist"\n\nLanguage rules:\n- Listener message in English only → recommend English songs\n- Listener message in Chinese only → recommend Chinese/Mandarin songs\n- Listener message mixed Chinese+English → mix naturally (~2 Chinese, ~3 English, or adjust to mood)\n  - Chinese songs: Mandarin pop, Cantopop, Chinese indie, etc.\n  - English songs: whatever fits the mood\nFor the "say" field language:
+  `Respond with this exact JSON structure:\n{\n  "say": "What Claudio says (1-3 sentences, plain conversational text only, no XML or SSML tags)",\n  "play": [\n    {"query": "song title artist", "title": "exact song title", "artist": "the artist actually performing THIS version (for covers: the cover artist, NEVER the original singer)", "reason": "why this song fits right now"}\n  ],\n  "mood": "detected mood keyword",\n  "segue": "brief transition thought for next song"\n}\nplay array MUST contain EXACTLY 5 songs. No more, no less.\n\nSong selection rules:\n- Never repeat songs from the recently played list above\n- Watch the recent-plays list for artists that keep recurring across the last several picks; deprioritize them and explore new artists from the same taste graph instead\n- Unless the listener names a specific artist this turn, the same artist may appear at most 2 times in one 5-song list, and the list must cover at least 3 different artists — treat the listener's favorite artists as seeds to branch into stylistically similar artists, not as the only options\n- If the listener specified a hard constraint (artist name / language / era / "latest" / genre), at least 4 of the 5 songs MUST strictly satisfy it; the remaining song may be a related pick but its reason must explain why it's included\n- If the listener asks for "pop" / "流行歌" / new music, default to songs released within the last 3 years unless they explicitly ask for classics/old songs; if you're not sure of a song's release year, don't pick it\n- Every song must be a real, officially released studio recording or a real official cover — never a live version, game-footage audio, mashup, or DJ remix, and never a fabricated title or a title/artist pairing you're not confident about\n- Cover versions are allowed, but "artist" must be the cover performer, not the original singer — mention the original singer in "say" if relevant, never in "artist"\n\nLanguage rules:\n- Listener message in English only → recommend English songs\n- Listener message in Chinese only → recommend Chinese/Mandarin songs\n- Listener message in Cantonese (uses 嘅/咁/唔/係/喺/咗/嚟/畀 etc.) → prefer Cantopop/Cantonese songs when they fit the request or mood\n- Listener message mixed Chinese+English → mix naturally (~2 Chinese, ~3 English, or adjust to mood)\n  - Chinese songs: Mandarin pop, Cantopop, Chinese indie, etc.\n  - English songs: whatever fits the mood\nFor the "say" field language:
 - Listener writes entirely in English → "say" must be in English
 - Listener writes entirely in Chinese → "say" must be in Chinese
+- Listener writes in Cantonese → "say" stays in Chinese characters but reads with a Cantonese speaking tone/phrasing, not translated into standard Mandarin
 - Listener writes in mixed or ambiguous language → "say" in Chinese`,
 ].join('\n\n---\n\n');
 
@@ -252,6 +259,8 @@ export async function djDecision(uid, userMessage, context) {
   const lang = detectLang(message);
   const langInstruction = lang === 'en'
     ? 'CRITICAL OVERRIDE: The listener wrote in English only. Your "say" field MUST be written entirely in English. Do not use any Chinese characters in "say".'
+    : lang === 'yue'
+    ? 'The listener wrote in Cantonese (粤语). Prefer Cantonese/Cantopop songs when they fit the request or mood. Your "say" field must be written in Chinese characters but with a Cantonese speaking tone and phrasing (colloquial Cantonese wording like 嘅/啦/㗎/唔使 is welcome) — do not translate it into standard Mandarin phrasing.'
     : 'The listener wrote in Chinese. Your "say" field must be in Chinese.';
 
   // getUserAiConfig throws AI_KEY_REQUIRED (own_only policy, no user key) —

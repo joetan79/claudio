@@ -1,12 +1,17 @@
 import { getSystemDb } from '../db/index.js';
 
+const DEFAULT_PROVIDER = 'fish';
+
 export function getDjVoices() {
   const db = getSystemDb();
   const row = db.prepare(`SELECT value FROM settings WHERE key = 'dj_voices'`).get();
   if (!row?.value) return [];
   try {
     const parsed = JSON.parse(row.value);
-    return Array.isArray(parsed) ? parsed : [];
+    if (!Array.isArray(parsed)) return [];
+    // Voices saved before the provider field existed default to 'fish' — a
+    // read-time hot migration, no DB migration script needed.
+    return parsed.map(v => ({ provider: DEFAULT_PROVIDER, ...v }));
   } catch {
     return [];
   }
@@ -20,11 +25,16 @@ export function setDjVoices(voices) {
   `).run(JSON.stringify(voices), Date.now());
 }
 
-export function resolveVoiceRef(voiceId) {
+// Returns the full voice object ({id, name, provider, ref}), not just the
+// ref string — the TTS layer needs `provider` to pick fish vs minimax.
+export function resolveVoice(voiceId) {
   const voices = getDjVoices();
-  if (!voices.length) return process.env.FISH_TTS_VOICE || null;
-  const voice = (voiceId && voices.find(v => v.id === voiceId)) || voices[0];
-  return voice?.ref ?? null;
+  if (!voices.length) {
+    return process.env.FISH_TTS_VOICE
+      ? { id: null, name: null, provider: DEFAULT_PROVIDER, ref: process.env.FISH_TTS_VOICE }
+      : null;
+  }
+  return (voiceId && voices.find(v => v.id === voiceId)) || voices[0];
 }
 
 export function getUserVoiceId(uid) {
@@ -33,8 +43,8 @@ export function getUserVoiceId(uid) {
   return row?.dj_voice ?? null;
 }
 
-export function resolveVoiceRefForUser(uid) {
-  return resolveVoiceRef(getUserVoiceId(uid));
+export function resolveVoiceForUser(uid) {
+  return resolveVoice(getUserVoiceId(uid));
 }
 
 export function getAiSettings() {

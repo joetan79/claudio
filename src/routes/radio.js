@@ -6,7 +6,7 @@ import { synthesize } from '../modules/tts.js';
 import { transcribe } from '../modules/asr.js';
 import { resolveSong, getSongUrl } from '../modules/ncm.js';
 import { searchYouTube, resolveSongVideos } from '../modules/youtube.js';
-import { resolveVoiceRefForUser } from '../modules/settings.js';
+import { resolveVoiceForUser } from '../modules/settings.js';
 
 const router = Router();
 // Accept 'application/octet-stream' too — some WebViews/browsers report a
@@ -62,7 +62,7 @@ router.post('/decide', async (req, res) => {
   // All songs' candidates are checked for embeddability in as few batched Data API
   // calls as possible (resolveSongVideos), rather than one call per song.
   const tTtsStart = Date.now();
-  const audioUrlPromise = synthesize(decision.say, { uid, voiceRef: resolveVoiceRefForUser(uid) });
+  const audioUrlPromise = synthesize({ text: decision.say, uid, voice: resolveVoiceForUser(uid) });
   audioUrlPromise.catch(() => {}); // observed early so a later throw below can't cause an unhandled rejection
 
   let playWithUrls;
@@ -166,7 +166,8 @@ router.post('/transcribe', (req, res, next) => {
 
   try {
     const text = await transcribe(req.body, { uid, mimeType: req.headers['content-type'] });
-    const language = detectLang(text) === 'zh' ? 'zh' : 'en';
+    // detectLang() returns exactly one of 'zh' | 'en' | 'yue' — pass it straight through.
+    const language = detectLang(text);
     res.json({ text, language });
   } catch (e) {
     if (e.code === 'OWN_KEY_INVALID') return res.status(e.status || 401).json({ error: e.message, code: e.code });
@@ -234,7 +235,7 @@ router.post('/plan/generate', async (req, res) => {
   let decision, audioUrl;
   try {
     decision = await djDecision(uid, message, context);
-    audioUrl = await synthesize(decision.say, { uid, voiceRef: resolveVoiceRefForUser(uid) }).catch(e => {
+    audioUrl = await synthesize({ text: decision.say, uid, voice: resolveVoiceForUser(uid) }).catch(e => {
       if (e.code === 'OWN_KEY_INVALID') throw e;
       return null;
     });

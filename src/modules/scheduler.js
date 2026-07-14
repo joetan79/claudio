@@ -1,7 +1,7 @@
 import { getSystemDb, getUserDb } from '../db/index.js';
 import { djDecision } from './claude.js';
 import { synthesize } from './tts.js';
-import { resolveVoiceRefForUser } from './settings.js';
+import { resolveVoiceForUser } from './settings.js';
 
 function getNextTriggerMs(hour) {
   const now = new Date();
@@ -26,7 +26,7 @@ async function generateDailyPlan(timeLabel, message, timeOfDay) {
         'INSERT OR REPLACE INTO memory (key, value, updated_at) VALUES (?, ?, ?)'
       ).run(`plan_${timeLabel}`, JSON.stringify(decision), Date.now());
 
-      if (decision.say) await synthesize(decision.say, { uid: user.id, voiceRef: resolveVoiceRefForUser(user.id) });
+      if (decision.say) await synthesize({ text: decision.say, uid: user.id, voice: resolveVoiceForUser(user.id) });
 
       console.log(`[Scheduler] Done for ${user.username}`);
     } catch (e) {

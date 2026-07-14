@@ -172,6 +172,10 @@ router.put('/voices', (req, res) => {
         typeof v.ref !== 'string' || !v.ref.trim()) {
       return res.status(400).json({ error: 'each voice needs id, name, and ref' });
     }
+    if (v.provider !== undefined && !['fish', 'minimax'].includes(v.provider))
+      return res.status(400).json({ error: "provider must be 'fish' or 'minimax'" });
+    if ((v.provider === 'minimax') && !process.env.MINIMAX_API_KEY)
+      return res.status(400).json({ error: `voice "${v.name}" uses provider 'minimax' but MINIMAX_API_KEY is not configured on this server` });
   }
   const ids = new Set(voices.map(v => v.id));
   if (ids.size !== voices.length)

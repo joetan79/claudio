@@ -321,7 +321,12 @@
       <input type="text" class="voice-name" id="voice-name-${i}" placeholder="Name"
         value="${(voicesData?.voices?.[i]?.name || '').replace(/"/g, '&quot;')}"
         style="flex:1;background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:9px 12px;font-size:0.88rem" />
-      <input type="text" class="voice-ref" id="voice-ref-${i}" placeholder="Fish reference_id"
+      <select class="voice-provider" id="voice-provider-${i}"
+        style="flex:0.7;background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:9px 12px;font-size:0.88rem">
+        <option value="fish" ${(voicesData?.voices?.[i]?.provider || 'fish') === 'fish' ? 'selected' : ''}>Fish</option>
+        <option value="minimax" ${voicesData?.voices?.[i]?.provider === 'minimax' ? 'selected' : ''}>MiniMax</option>
+      </select>
+      <input type="text" class="voice-ref" id="voice-ref-${i}" placeholder="reference_id / voice_id"
         value="${(voicesData?.voices?.[i]?.ref || '').replace(/"/g, '&quot;')}"
         style="flex:1.4;background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:9px 12px;font-size:0.88rem;font-family:monospace" />
     </div>`).join('')}
@@ -404,10 +409,11 @@
   async function saveVoices() {
     const rows = [0, 1, 2, 3].map(i => ({
       name: document.getElementById(`voice-name-${i}`).value.trim(),
+      provider: document.getElementById(`voice-provider-${i}`).value,
       ref: document.getElementById(`voice-ref-${i}`).value.trim(),
     })).filter(r => r.name && r.ref);
     if (rows.length === 0) { alert('At least one voice (name + reference_id) is required.'); return; }
-    const voices = rows.map((r, idx) => ({ id: `voice${idx + 1}`, name: r.name, ref: r.ref }));
+    const voices = rows.map((r, idx) => ({ id: `voice${idx + 1}`, name: r.name, provider: r.provider, ref: r.ref }));
     const btn = document.getElementById('btn-save-voices');
     btn.disabled = true;
     try {

@@ -141,7 +141,7 @@ router.post('/voice/preview', async (req, res) => {
   if (!entry) return res.status(400).json({ error: 'unknown voice id' });
 
   try {
-    const audioUrl = await synthesize(VOICE_PREVIEW_TEXT, { uid: req.user.uid, voiceRef: entry.ref });
+    const audioUrl = await synthesize({ text: VOICE_PREVIEW_TEXT, uid: req.user.uid, voice: entry });
     if (!audioUrl) return res.status(502).json({ error: 'TTS failed' });
     res.json({ audioUrl });
   } catch (e) {
