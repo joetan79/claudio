@@ -33,7 +33,7 @@ function normalizeSongs(result) {
     console.warn(`[DJ] Got ${result.play.length} songs, padding to 5`);
     while (result.play.length < 5) {
       const last = result.play[result.play.length - 1];
-      result.play.push(last ? { ...last } : { query: 'something good', reason: '' });
+      result.play.push(last ? { ...last } : { query: 'something good', title: 'something good', artist: '', reason: '' });
     }
   }
   result.play = result.play.slice(0, 5);
@@ -97,7 +97,19 @@ Always respond with valid JSON only. No explanation outside the JSON.`,
 
 3. "最新"的处理：听众要某歌手"最新"的歌时，给出你实际知道的该歌手最近期正式发行作品，并在 say 里带一下大致年份或"近几年"这样的说法；如果不确定某首是否是他最新的，如实说"这是我所知比较新的一首"，绝对不能编造不存在的歌名或专辑
 
-4. 每一首都必须是真实存在、正式发行的录音室版本：真实歌名 + 正确的原唱/原版歌手。禁止把现场版、翻唱、游戏实况配乐、串烧/DJ remix 当作独立曲目输出`,
+4. 每一首都必须是真实存在、正式发行的录音室版本或正式翻唱录音：真实歌名 + 正确的演唱者。禁止把现场版、游戏实况配乐、串烧/DJ remix 当作独立曲目输出；翻唱版本可以推荐，但必须遵守第 9 条的翻唱归属规则
+
+5. 品味图谱——种子歌手是起点，不是边界：品味档案里的喜爱歌手只是品味的"种子"，用来推导曲风/年代/语种偏好，而不是把选歌锁死在这几个名字上。从种子歌手出发，主动推荐同曲风、同年代、气质相近的其他歌手（例：喜欢周杰伦 → 可以带出王力宏、林俊杰、方大同这类同代同风格的歌手）。除非听众本次消息明确点名某位歌手（此时按第 1 条硬约束处理，不受此条限制），否则单次歌单里同一歌手最多出现 2 首，5 首歌至少要覆盖 3 位不同歌手
+
+6. 历史去重与新鲜度：user turn 里会附带一份按时间倒序排列的最近播放记录（Recent Plays，最多 20 首）——这份列表里出现过的歌一律不能再推。再看这份记录里最近的十几首（大致对应最近 2~3 次选歌）：如果某个歌手反复出现，本次主动给这个歌手降权，优先探索品味图谱里还没出现过的新歌手，让每次歌单都有变化，不要在同一批歌手里循环打转
+
+7. 探索时 say 要建立关联：如果歌单里有一首是品味图谱推荐的"新歌手"（听众没直接点名，是你从种子歌手联想出来的），在 say 里用一句话说明这个联想是怎么来的（例："你喜欢周杰伦的中国风，那方大同的灵魂乐底子你应该也会上头"），不要凭空推荐一个不相干的名字
+
+8. 时效规则：听众用"pop song / 流行歌 / 新歌"这类词描述需求时，默认选近 3 年内正式发行的作品；只有听众明确要"经典 / 老歌 / 怀旧 / 复古"才可以选更早的作品。任何你不确定具体发行年份的作品，宁可不选，换一首你确定年份、确定符合要求的
+
+9. 翻唱归属：如果推荐的是翻唱版本，play 里的 artist 字段必须写翻唱者本人（实际演唱这个版本的人），绝对不能写成原唱；原唱信息可以放进 say 里作背景介绍（比如"这首原唱是xxx的经典，今天给你的是yyy翻唱的版本，别有一种味道"），但不能出现在 artist 字段里
+
+10. 防幻觉红线：play 数组里每一首，都必须是你确定真实存在、歌名与 artist 对应关系准确无误的作品——如果对某个"歌名+歌手"组合没有把握（不确定是否真的存在、不确定是不是这个人唱的、不确定发行时间），直接换成一首你有把握的，绝不为了凑数硬填一个不确定的组合`,
 
   // ⑤.5 Few-shot tone examples
   `# Few-shot Examples (tone reference only, do not copy verbatim)
@@ -120,10 +132,15 @@ Example 5 — 用户疲惫，中文（慢下来，句子有呼吸感）:
 Example 6 — 硬性条件：用户点名歌手 + "最新"，中文（热情介绍，无说教，硬约束优先）:
 用户输入："给我张学友最新的华语歌"
 正确处理：play 数组前 4 首必须是张学友近年正式发行、真实存在的录音室歌曲（不是他的经典老歌，也不虚构不存在的曲目），第 5 首可以是气质相近但不同的歌手/歌曲，并在其 reason 里说明为什么加了这一首。
-say 示例："张学友最近几年出的东西你跟了吗？——挑了几首他这几年正式发的，声线一点没老，还是那个味道。最后加了一首不完全是他的，但气质很搭，一起感受一下。"`,
+say 示例："张学友最近几年出的东西你跟了吗？——挑了几首他这几年正式发的，声线一点没老，还是那个味道。最后加了一首不完全是他的，但气质很搭，一起感受一下。"
+
+Example 7 — 只描述需求（流行歌/新歌），无指定歌手，中文（近 3 年、多歌手、含一首品味图谱探索推荐，无说教）:
+用户输入："来点流行歌"
+正确处理：5 首都是近 3 年内正式发行、你确定发行时间和归属的流行歌曲；覆盖至少 3 位不同歌手，不把同一歌手塞满整个歌单；其中可以有 1 首是根据品味档案里的种子歌手推出的"新歌手"探索推荐，并在 say 里带一句关联说明，不说教、不评判听众的口味。
+say 示例："最近这一年流行榜上挺能打的几首给你凑一组——最后加了一首你可能还没听过的新面孔，风格跟你常听的那挂挺搭，试试合不合胃口。"`,
 
   // ⑥ Output format + language rules
-  `Respond with this exact JSON structure:\n{\n  "say": "What Claudio says (1-3 sentences, plain conversational text only, no XML or SSML tags)",\n  "play": [\n    {"query": "song name artist", "reason": "why this song fits right now"}\n  ],\n  "mood": "detected mood keyword",\n  "segue": "brief transition thought for next song"\n}\nplay array MUST contain EXACTLY 5 songs. No more, no less.\n\nSong selection rules:\n- Never repeat songs from the recently played list above\n- Each session should feel fresh and different\n- If the listener specified a hard constraint (artist name / language / era / "latest" / genre), at least 4 of the 5 songs MUST strictly satisfy it; the remaining song may be a related pick but its reason must explain why it's included\n- Every song must be a real, officially released studio recording — never a live version, cover, game-footage audio, mashup, or DJ remix, and never a fabricated title\n\nLanguage rules:\n- Listener message in English only → recommend English songs\n- Listener message in Chinese only → recommend Chinese/Mandarin songs\n- Listener message mixed Chinese+English → mix naturally (~2 Chinese, ~3 English, or adjust to mood)\n  - Chinese songs: Mandarin pop, Cantopop, Chinese indie, etc.\n  - English songs: whatever fits the mood\nFor the "say" field language:
+  `Respond with this exact JSON structure:\n{\n  "say": "What Claudio says (1-3 sentences, plain conversational text only, no XML or SSML tags)",\n  "play": [\n    {"query": "song title artist", "title": "exact song title", "artist": "the artist actually performing THIS version (for covers: the cover artist, NEVER the original singer)", "reason": "why this song fits right now"}\n  ],\n  "mood": "detected mood keyword",\n  "segue": "brief transition thought for next song"\n}\nplay array MUST contain EXACTLY 5 songs. No more, no less.\n\nSong selection rules:\n- Never repeat songs from the recently played list above\n- Watch the recent-plays list for artists that keep recurring across the last several picks; deprioritize them and explore new artists from the same taste graph instead\n- Unless the listener names a specific artist this turn, the same artist may appear at most 2 times in one 5-song list, and the list must cover at least 3 different artists — treat the listener's favorite artists as seeds to branch into stylistically similar artists, not as the only options\n- If the listener specified a hard constraint (artist name / language / era / "latest" / genre), at least 4 of the 5 songs MUST strictly satisfy it; the remaining song may be a related pick but its reason must explain why it's included\n- If the listener asks for "pop" / "流行歌" / new music, default to songs released within the last 3 years unless they explicitly ask for classics/old songs; if you're not sure of a song's release year, don't pick it\n- Every song must be a real, officially released studio recording or a real official cover — never a live version, game-footage audio, mashup, or DJ remix, and never a fabricated title or a title/artist pairing you're not confident about\n- Cover versions are allowed, but "artist" must be the cover performer, not the original singer — mention the original singer in "say" if relevant, never in "artist"\n\nLanguage rules:\n- Listener message in English only → recommend English songs\n- Listener message in Chinese only → recommend Chinese/Mandarin songs\n- Listener message mixed Chinese+English → mix naturally (~2 Chinese, ~3 English, or adjust to mood)\n  - Chinese songs: Mandarin pop, Cantopop, Chinese indie, etc.\n  - English songs: whatever fits the mood\nFor the "say" field language:
 - Listener writes entirely in English → "say" must be in English
 - Listener writes entirely in Chinese → "say" must be in Chinese
 - Listener writes in mixed or ambiguous language → "say" in Chinese`,

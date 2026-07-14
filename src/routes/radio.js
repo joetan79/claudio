@@ -72,24 +72,30 @@ router.post('/decide', async (req, res) => {
     const ncmResults = await Promise.all(songs.map(song => resolveSong(song.query).catch(() => null)));
     console.log(`[timing] ncm_ms=${Date.now() - tNcmStart}`);
 
-    const ytQueries = songs.map((song, i) => {
+    const ytRequests = songs.map((song, i) => {
       const ncm = ncmResults[i];
-      return ncm ? `${ncm.name} ${ncm.artist}` : song.query;
+      const title = ncm?.name || song.title || '';
+      const artist = ncm?.artist || song.artist || '';
+      const query = ncm ? `${ncm.name} ${ncm.artist}` : song.query;
+      return { query, title, artist };
     });
     const tYtStart = Date.now();
-    const ytResults = await resolveSongVideos(ytQueries);
+    const ytResults = await resolveSongVideos(ytRequests);
     console.log(`[timing] yt_resolve_ms=${Date.now() - tYtStart}`);
 
+    // Display name always follows the actual matched video's metadata, never
+    // Claude's original guess — otherwise what's shown/stored can name a
+    // different song than what's actually embedded and played.
     playWithUrls = songs.map((song, i) => {
       const ncm = ncmResults[i];
       const yt = ytResults[i];
 
       let song_name, artist;
-      if (yt?.source === 'ytmusic') {
+      if (yt?.title) {
         song_name = yt.title;
-        artist = yt.artist || '';
+        artist = yt.source === 'ytmusic' ? (yt.artist || '') : (ncm?.artist || song.artist || '');
       } else {
-        song_name = ncm?.name || song.query;
+        song_name = ncm?.name || song.title || song.query;
         artist = ncm?.artist || song.artist || '';
       }
       const query = artist ? `${song_name} - ${artist}` : song_name;
@@ -113,7 +119,15 @@ router.post('/decide', async (req, res) => {
       ].filter(Boolean);
       for (const q of fallbacks) {
         const yt = await searchYouTube(q).catch(() => null);
-        if (yt?.videoId) return { ...song, yt };
+        if (yt?.videoId) {
+          // The fallback query is generic (e.g. "<artist> popular song"), so it
+          // can land on a different track than the original request — recompute
+          // the displayed name from the actual match rather than keeping the
+          // stale song_name/query computed against the discarded lookup.
+          const song_name = yt.title || song.song_name;
+          const query = artist ? `${song_name} - ${artist}` : song_name;
+          return { ...song, yt, song_name, query };
+        }
       }
       return song;
     })
