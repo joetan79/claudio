@@ -1,5 +1,21 @@
 import ytsr from 'ytsr';
 import { Innertube, YTNodes } from 'youtubei.js';
+import * as OpenCC from 'opencc-js';
+
+// YT Music's catalog is predominantly Traditional-titled for Cantopop and
+// older HK/TW-originated Mandopop, but Claude (and the songbook generator)
+// frequently output Simplified script for the exact same song — without
+// canonicalizing both sides to one script first, a correct match like
+// "海阔天空"/"海闊天空" fails the strict correlation check outright. This
+// silently dropped real, correctly-attributed songs (discovered via the
+// Phase 8I songbook builder's near-100% rejection rate on famous, definitely
+// -real Cantopop classics) in both the songbook build and, previously
+// unnoticed, the live decide pipeline's own song resolution.
+const toTraditional = OpenCC.Converter({ from: 'cn', to: 't' });
+function canonicalizeScript(s) {
+  if (!s) return s;
+  try { return toTraditional(s); } catch { return s; }
+}
 
 const PREFERRED = ['official', 'music', 'vevo', 'topic'];
 const BLOCKED_TITLE = /cover|翻唱|remix|live|现场|伴奏|instrumental|karaoke/i;
@@ -77,7 +93,7 @@ function titleMatchesQuery(title, query) {
 // hit, to catch cases where the top result is a same-named-but-different
 // song or a different artist entirely ("writes A, plays B").
 function normalizeCompact(s) {
-  return (s || '').toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
+  return canonicalizeScript(s || '').toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
 }
 
 const ARTIST_SEPARATOR = /\s*(?:,|，|、|&|＆|\/|×|feat\.?|ft\.?|with)\s*/i;
@@ -114,9 +130,18 @@ function artistMatches(candidateArtist, requestedArtist) {
   });
 }
 
+// Official label-channel uploads (common for classic/legacy catalog) often
+// put the artist's name directly in the video title rather than tagging it
+// as the channel/artist metadata — e.g. a "華星唱片 Capital Artists Official
+// Channel" upload titled "Monica | 張國榮 Leslie Cheung | Official Music
+// Video". Once the song title itself is already confirmed to match, also
+// accepting an artist match found within the candidate's own title (not
+// just its artist/channel field) catches these without loosening anything
+// else — the song-title match already anchors this to the right recording.
 function candidateMatchesRequest(candidate, request) {
-  return titleBodyMatches(candidate.title, request.title) &&
-    artistMatches(candidate.artist ?? candidate.channel ?? '', request.artist);
+  if (!titleBodyMatches(candidate.title, request.title)) return false;
+  const artistField = candidate.artist ?? candidate.channel ?? '';
+  return artistMatches(artistField, request.artist) || artistMatches(candidate.title, request.artist);
 }
 
 function passesFallbackFilters(title, durationSeconds, query, channel) {

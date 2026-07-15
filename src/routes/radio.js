@@ -5,8 +5,9 @@ import { djDecision, getTimeOfDay, detectLang, detectProfileLang, normalizeDecid
 import { synthesize } from '../modules/tts.js';
 import { transcribe } from '../modules/asr.js';
 import { resolveSong, getSongUrl } from '../modules/ncm.js';
-import { searchYouTube, resolveSongVideoBudgeted } from '../modules/youtube.js';
+import { searchYouTube, resolveSongVideoBudgeted, checkEmbeddableBatch } from '../modules/youtube.js';
 import { resolveVoiceByLang, resolveVoiceForLang, resolveVoiceForUser, getUserPreferredLang } from '../modules/settings.js';
+import { lookupSongbookVideoId } from '../modules/songbook.js';
 
 // Phase 8H routing rule, strictly in this order:
 //   a. detectLang is confident (Cantonese-marker hit, Simplified Chinese, or
@@ -52,14 +53,29 @@ async function resolveOneSong(song, decision) {
 
   const work = (async () => {
     const tNcm = Date.now();
-    const ncm = await resolveSong(song.query).catch(() => null);
+    // Phase 8I songbook fast path: check for a pre-verified videoId in
+    // parallel with the NCM lookup (independent calls) — if this pick
+    // matches a songbook entry and its cached videoId is still embeddable,
+    // the entire YT search chain below is skipped.
+    const songbookHit = lookupSongbookVideoId(song.title, song.artist);
+    const [ncm, songbookEmbedMap] = await Promise.all([
+      resolveSong(song.query).catch(() => null),
+      songbookHit?.videoId ? checkEmbeddableBatch([songbookHit.videoId]) : Promise.resolve(null),
+    ]);
     const title = ncm?.name || song.title || '';
     const artist0 = ncm?.artist || song.artist || '';
     const query = ncm ? `${ncm.name} ${ncm.artist}` : song.query;
     console.log(`[timing] song="${song.title}" ncm_ms=${Date.now() - tNcm}`);
 
     const tYt = Date.now();
-    let yt = await resolveSongVideoBudgeted({ query, title, artist: artist0 }, SONG_BUDGET_MS - (Date.now() - tStart)).catch(() => null);
+    let yt = null;
+    if (songbookHit?.videoId && songbookEmbedMap?.get(songbookHit.videoId)) {
+      yt = { videoId: songbookHit.videoId, title: songbookHit.name, artist: songbookHit.artist, source: 'songbook', altIds: [] };
+      console.log(`[songbook] fast-path hit for "${song.title}" by "${song.artist}" — skipped YT search`);
+    }
+    if (!yt) {
+      yt = await resolveSongVideoBudgeted({ query, title, artist: artist0 }, SONG_BUDGET_MS - (Date.now() - tStart)).catch(() => null);
+    }
     console.log(`[timing] song="${song.title}" yt_ms=${Date.now() - tYt} source=${yt?.source ?? 'none'}`);
 
     // Double-insurance (log-only, not a filter): when the listener explicitly
@@ -80,7 +96,7 @@ async function resolveOneSong(song, decision) {
     // NCM's, if it matched) are clean and stay the source of truth for what's
     // shown/stored, even though the video's own title decided the search.
     let song_name, artist;
-    if (yt?.source === 'ytmusic' && yt.title) {
+    if ((yt?.source === 'ytmusic' || yt?.source === 'songbook') && yt.title) {
       song_name = yt.title;
       artist = yt.artist || '';
     } else {

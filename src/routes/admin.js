@@ -3,6 +3,7 @@ import bcrypt from 'bcryptjs';
 import { getSystemDb } from '../db/index.js';
 import { requireAdmin } from '../middleware/admin.js';
 import { getDjVoices, setDjVoices, getAiSettings, setAiSettings } from '../modules/settings.js';
+import { buildSongbook, getSongbookStats } from '../modules/songbook.js';
 
 const router = Router();
 router.use(requireAdmin);
@@ -190,6 +191,37 @@ router.put('/voices', (req, res) => {
 
   setDjVoices(voices);
   res.json({ ok: true });
+});
+
+// In-memory job status (Phase 8I) — a single admin-triggered background job
+// at a time is the whole use case ("每季度点一次"), so no queue/persistence
+// needed; a server restart mid-build just loses the status, not the partial
+// songbook.json (buildSongbook only writes the file once, at the very end).
+let songbookJob = { running: false, startedAt: null, finishedAt: null, report: null, error: null };
+
+router.get('/songbook', (req, res) => {
+  res.json({ stats: getSongbookStats(), job: songbookJob });
+});
+
+router.post('/songbook/rebuild', (req, res) => {
+  if (songbookJob.running) {
+    return res.status(409).json({ error: 'Songbook rebuild already in progress' });
+  }
+  songbookJob = { running: true, startedAt: Date.now(), finishedAt: null, report: null, error: null };
+  res.json({ ok: true, started: true });
+
+  // Fire-and-forget: the response above already went out, this runs after —
+  // errors here must not become an unhandled rejection (see server.js's
+  // uncaughtException/unhandledRejection backstop for why that matters).
+  buildSongbook({ onProgress: msg => console.log(`[songbook] ${msg}`) })
+    .then(report => {
+      songbookJob = { running: false, startedAt: songbookJob.startedAt, finishedAt: Date.now(), report, error: null };
+      console.log('[songbook] rebuild complete:', JSON.stringify(report.categories));
+    })
+    .catch(e => {
+      songbookJob = { running: false, startedAt: songbookJob.startedAt, finishedAt: Date.now(), report: null, error: e.message };
+      console.error('[songbook] rebuild failed:', e);
+    });
 });
 
 export default router;

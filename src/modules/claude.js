@@ -6,6 +6,7 @@ import { decrypt, isEncryptionEnabled } from './crypto.js';
 import { recordUsage } from './usage.js';
 import { aiComplete } from './ai.js';
 import { getAiSettings } from './settings.js';
+import { pickSongbookSample } from './songbook.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.resolve(__dirname, '../../data');
@@ -170,7 +171,9 @@ Always respond with valid JSON only. No explanation outside the JSON.`,
 
 12. 新潮粤语歌的歌手库：听众要"新/潮流粤语歌"时，别只会拿经典老牌歌手撑场——近年活跃的新世代 Cantopop 歌手/组合包括：MIRROR 系（姜濤、陳卓賢、呂爵安等成员）、林家谦、张天赋、Serrini、Gareth.T、moon tang、Cloud 雲浩影、COLLAR 等，这些才是"新潮粤语"听众通常想听到的。结合第 8 条的时效规则，"新/潮流"要求默认选近 3 年内的作品
 
-13. say 里提具体歌名要克制：最多点名 1-2 首（通常是最想安利的那首），其余用"这几首""整组""后面几首"这类概括说法带过，不要逐首报幕式地把 7 首的名字都念一遍——这样即使个别候选歌曲最终因搜索不到而被替换，你说的话也不会跟实际播的歌对不上`,
+13. say 里提具体歌名要克制：最多点名 1-2 首（通常是最想安利的那首），其余用"这几首""整组""后面几首"这类概括说法带过，不要逐首报幕式地把 7 首的名字都念一遍——这样即使个别候选歌曲最终因搜索不到而被替换，你说的话也不会跟实际播的歌对不上
+
+14. 参考曲库：如果 user turn 里出现"参考曲库"区块，这是一份预先验证过真实存在、可正常播放的候选歌曲池（格式：歌名|歌手|年份）——优先从这份列表里选；列表外的歌依然可以选，但必须是第 10 条要求的"你高度确定真实存在"的作品，不能因为曲库存在就降低对列表外歌曲的确定性要求。如果 user turn 里还有"已听过"区块，里面列出的歌（不论是否来自参考曲库）本次一律不能选`,
 
   // ⑤.5 Few-shot tone examples
   `# Few-shot Examples (tone reference only, do not copy verbatim — note how short these say lines are, well under the 80-character/60-word cap)
@@ -300,6 +303,31 @@ export async function djDecision(uid, userMessage, context, routedLang) {
     : '';
 
   const message = normalizeDecideMessage(userMessage);
+  const lang = routedLang || detectLang(message).lang;
+
+  // Phase 8I songbook: a random per-request sample of pre-verified songs
+  // (title/artist confirmed to exist and be embeddable) for this language +
+  // era, injected into the user turn (not the cached system block — the
+  // sample changes every call, so it can't live in SYSTEM_BLOCKS without
+  // busting the cache). See rule 14 in STATIC_SYSTEM_PROMPT for how the
+  // model is told to treat this block.
+  const songbookSample = pickSongbookSample(lang, message);
+  const songbookBlock = songbookSample
+    ? `## 参考曲库（优先从这里选，格式：歌名|歌手|年份）\n${songbookSample.text}`
+    : null;
+
+  // Separate from the 20-song "Recent Plays" block above (which also drives
+  // the AI's artist-recency dedup, rule 6) — this is a much longer 60-day
+  // lookback specifically to stop the same songbook entries resurfacing
+  // week over week, now that a curated ~100-song-per-category pool gets
+  // resampled repeatedly. LIMIT keeps this within the ~300-500 token budget
+  // the phase spec targets.
+  const excludeSongs = db.prepare(
+    'SELECT DISTINCT song_name, artist FROM plays WHERE played_at >= ? ORDER BY played_at DESC LIMIT 100'
+  ).all(Date.now() - 60 * 24 * 60 * 60 * 1000);
+  const excludeBlock = excludeSongs.length
+    ? `## 已听过（最近60天内播放过，本次一律不能选，无论是否来自参考曲库）\n${excludeSongs.map(s => `${s.song_name}-${s.artist}`).join('、')}`
+    : null;
 
   // Everything below is per-user/per-request — none of it is byte-stable
   // across calls, so it stays in the user turn. The static persona/rules/
@@ -319,11 +347,14 @@ export async function djDecision(uid, userMessage, context, routedLang) {
     // ④.5 Avoid instruction
     ...(avoidInstruction ? [avoidInstruction] : []),
 
+    // ④.6 Songbook reference pool + 60-day exclusion list (Phase 8I)
+    ...(songbookBlock ? [songbookBlock] : []),
+    ...(excludeBlock ? [excludeBlock] : []),
+
     // ⑤ Listener message
     `## Listener says\n"${message}"`,
   ].join('\n\n---\n\n');
 
-  const lang = routedLang || detectLang(message).lang;
   const langInstruction = lang === 'en'
     ? 'CRITICAL OVERRIDE: The listener wrote in English only. Your "say" field MUST be written entirely in English. Do not use any Chinese characters in "say".'
     : lang === 'yue'

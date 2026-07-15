@@ -130,6 +130,8 @@
   let chartDaily = null;
   let voicesData = null;
   let aiSettingsData = null;
+  let songbookData = null;
+  let songbookPollTimer = null;
 
   function fmtDate(ts) {
     if (!ts) return '—';
@@ -160,6 +162,7 @@
     usersData = result;
     voicesData = await apiFetch('GET', '/api/admin/voices').catch(() => ({ voices: [] }));
     aiSettingsData = await apiFetch('GET', '/api/admin/ai-settings').catch(() => ({ provider: 'anthropic', model: '' }));
+    songbookData = await apiFetch('GET', '/api/admin/songbook').catch(() => null);
     render();
   }
 
@@ -361,6 +364,16 @@
 </div>
 <div class="usage-section">
   <div class="usage-header">
+    <span class="usage-title">Songbook</span>
+  </div>
+  <div class="table-wrap" style="padding:18px">
+    ${songbookRowsHtml()}
+    <button class="btn-action btn-role" id="btn-rebuild-songbook" style="margin-top:8px" ${songbookData?.job?.running ? 'disabled' : ''}>${songbookData?.job?.running ? 'Rebuilding…' : '重建曲库 Rebuild Songbook'}</button>
+    <span id="songbook-status-msg" style="font-size:0.82rem;color:var(--muted);margin-left:10px">${songbookStatusText()}</span>
+  </div>
+</div>
+<div class="usage-section">
+  <div class="usage-header">
     <span class="usage-title">Usage</span>
     <div class="range-toggle">
       <button class="range-btn ${usageDays === 7 ? 'active' : ''}" data-days="7">7d</button>
@@ -392,6 +405,8 @@
     if (providerSelect) providerSelect.value = aiSettingsData?.provider || 'anthropic';
     if (modelInput) modelInput.value = aiSettingsData?.model || '';
     document.getElementById('btn-save-ai-settings')?.addEventListener('click', saveAiSettings);
+    document.getElementById('btn-rebuild-songbook')?.addEventListener('click', rebuildSongbook);
+    if (songbookData?.job?.running) startSongbookPolling();
     loadUsage();
   }
 
@@ -438,6 +453,65 @@
     } finally {
       btn.disabled = false;
     }
+  }
+
+  const SONGBOOK_LABELS = {
+    'yue-new': '新潮粤语', 'yue-classic': '经典粤语',
+    'zh-pop': '华语流行', 'zh-classic': '华语经典', 'en-pop': '英文流行',
+  };
+
+  function songbookRowsHtml() {
+    const stats = songbookData?.stats;
+    if (!stats) return `<div class="section-desc" style="margin-bottom:12px;font-size:0.85rem;color:var(--muted)">曲库尚未生成 — 首次生成大约需要几分钟。</div>`;
+    const rows = Object.entries(stats.categories).map(([k, n]) =>
+      `<div style="display:flex;justify-content:space-between;font-size:0.85rem;padding:4px 0"><span style="color:var(--muted)">${SONGBOOK_LABELS[k] || k}</span><span>${n} 首</span></div>`
+    ).join('');
+    return `<div style="margin-bottom:12px">${rows}</div>
+    <div style="font-size:0.78rem;color:var(--muted);margin-bottom:12px">最近生成：${fmtDate(stats.builtAt)}</div>`;
+  }
+
+  function songbookStatusText() {
+    const job = songbookData?.job;
+    if (!job) return '';
+    if (job.running) return `进行中，已运行 ${Math.round((Date.now() - job.startedAt) / 1000)}s…`;
+    if (job.error) return `上次失败：${job.error}`;
+    if (job.report) {
+      const parts = Object.entries(job.report.categories).map(([k, s]) => `${SONGBOOK_LABELS[k] || k} ${s.verified}/${s.generated}`);
+      return `完成：${parts.join('，')}`;
+    }
+    return '';
+  }
+
+  async function rebuildSongbook() {
+    if (!confirm('重建曲库会调用 AI 与 YouTube 搜索，耗时可能数分钟。确定要开始吗？')) return;
+    const btn = document.getElementById('btn-rebuild-songbook');
+    try {
+      await apiFetch('POST', '/api/admin/songbook/rebuild');
+      songbookData = await apiFetch('GET', '/api/admin/songbook').catch(() => songbookData);
+      renderDashboard();
+      startSongbookPolling();
+    } catch (e) {
+      alert('Error: ' + e.message);
+    }
+  }
+
+  function startSongbookPolling() {
+    if (songbookPollTimer) return;
+    songbookPollTimer = setInterval(async () => {
+      songbookData = await apiFetch('GET', '/api/admin/songbook').catch(() => songbookData);
+      const msg = document.getElementById('songbook-status-msg');
+      const btn = document.getElementById('btn-rebuild-songbook');
+      if (msg) msg.textContent = songbookStatusText();
+      if (!songbookData?.job?.running) {
+        clearInterval(songbookPollTimer);
+        songbookPollTimer = null;
+        if (btn) { btn.disabled = false; btn.textContent = '重建曲库 Rebuild Songbook'; }
+        alert(songbookData?.job?.error ? `曲库重建失败：${songbookData.job.error}` : '曲库重建完成。');
+        renderDashboard();
+      } else if (btn) {
+        btn.disabled = true; btn.textContent = 'Rebuilding…';
+      }
+    }, 5000);
   }
 
   async function loadUsage() {
@@ -554,6 +628,7 @@
         usersData = await apiFetch('GET', '/api/admin/users');
         voicesData = await apiFetch('GET', '/api/admin/voices').catch(() => ({ voices: [] }));
         aiSettingsData = await apiFetch('GET', '/api/admin/ai-settings').catch(() => ({ provider: 'anthropic', model: '' }));
+        songbookData = await apiFetch('GET', '/api/admin/songbook').catch(() => null);
         renderDashboard();
       } catch (e) {
         if (e.status === 401 || e.status === 403) {
