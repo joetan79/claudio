@@ -78,18 +78,22 @@ ${cfg.seed}
   return parseSongLines(result.text);
 }
 
-async function generateCategoryCandidates(cfg, onProgress) {
-  const seen = new Set();
+// seedEntries: already-in-songbook entries (a supplemental top-up run passes
+// its category's existing entries here) — folded into the avoid-list from
+// the very first batch so a top-up run doesn't waste generations re-deriving
+// songs that are already verified and in the file.
+async function generateCategoryCandidates(cfg, onProgress, { batches = BATCHES_PER_CATEGORY, seedEntries = [] } = {}) {
+  const seen = new Set(seedEntries.map(dedupeKey));
   const all = [];
-  for (let b = 0; b < BATCHES_PER_CATEGORY; b++) {
-    const batch = await generateBatch(cfg, all);
+  for (let b = 0; b < batches; b++) {
+    const batch = await generateBatch(cfg, [...seedEntries, ...all]);
     for (const s of batch) {
       const key = dedupeKey(s);
       if (seen.has(key)) continue;
       seen.add(key);
       all.push(s);
     }
-    onProgress?.(`batch ${b + 1}/${BATCHES_PER_CATEGORY} -> ${all.length} unique candidates so far`);
+    onProgress?.(`batch ${b + 1}/${batches} -> ${all.length} unique candidates so far`);
   }
   return all;
 }
@@ -140,25 +144,43 @@ async function verifyCandidates(candidates, onProgress) {
   return verified;
 }
 
-// Full rebuild — generates candidates per category (AI, batched with a
-// running avoid-list to reduce cross-batch duplicates), then validates every
-// candidate against YT Music before it's allowed into the songbook. Not run
-// automatically; invoked by scripts/build-songbook.js (CLI, one-off/rerunnable)
-// or the admin "重建曲库" button (async job, see admin.js).
-export async function buildSongbook({ onProgress } = {}) {
+// Full rebuild (no `categories` filter) starts every category from scratch
+// — this is what the admin "重建曲库" button and a bare CLI run do, matching
+// the original quarterly-refresh spec. Passing `categories` switches to a
+// targeted top-up mode instead: only the named categories are touched, each
+// one's existing entries are kept and folded into the avoid-list, and newly
+// verified songs are appended (deduped) rather than replacing the category —
+// e.g. `node scripts/build-songbook.js --categories=yue-new --batches=10` to
+// grow a thin category without re-spending on the other four. `batches`
+// overrides BATCHES_PER_CATEGORY for this run (a thin category may need more
+// batches per net new song, given its own hallucination rate).
+export async function buildSongbook({ onProgress, categories: onlyCategories, batches } = {}) {
   const startedAt = Date.now();
-  const categories = {};
+  const isTopUp = !!onlyCategories?.length;
+  const existing = isTopUp ? loadSongbook() : null;
+  const categories = isTopUp && existing ? { ...existing.categories } : {};
   const report = { categories: {} };
 
-  for (const [catKey, cfg] of Object.entries(CATEGORIES)) {
+  const targets = isTopUp
+    ? Object.entries(CATEGORIES).filter(([k]) => onlyCategories.includes(k))
+    : Object.entries(CATEGORIES);
+
+  for (const [catKey, cfg] of targets) {
+    const priorEntries = categories[catKey] || [];
     onProgress?.(`[${catKey}] generating candidates...`);
-    const candidates = await generateCategoryCandidates(cfg, msg => onProgress?.(`[${catKey}] ${msg}`));
+    const candidates = await generateCategoryCandidates(cfg, msg => onProgress?.(`[${catKey}] ${msg}`), { batches, seedEntries: priorEntries });
     onProgress?.(`[${catKey}] verifying ${candidates.length} candidates against YT Music...`);
     const verified = await verifyCandidates(candidates, msg => onProgress?.(`[${catKey}] ${msg}`));
-    categories[catKey] = verified;
+
+    const seen = new Set(priorEntries.map(dedupeKey));
+    const fresh = verified.filter(e => !seen.has(dedupeKey(e)));
+    const merged = [...priorEntries, ...fresh];
+    categories[catKey] = merged;
     report.categories[catKey] = {
       generated: candidates.length,
       verified: verified.length,
+      newlyAdded: fresh.length,
+      totalNow: merged.length,
       rejectionRate: candidates.length ? 1 - verified.length / candidates.length : 0,
     };
   }
