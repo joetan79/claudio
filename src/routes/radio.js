@@ -6,7 +6,25 @@ import { synthesize } from '../modules/tts.js';
 import { transcribe } from '../modules/asr.js';
 import { resolveSong, getSongUrl } from '../modules/ncm.js';
 import { searchYouTube, resolveSongVideoBudgeted } from '../modules/youtube.js';
-import { resolveVoiceByLang, resolveVoiceForLang, resolveVoiceForUser } from '../modules/settings.js';
+import { resolveVoiceByLang, resolveVoiceForLang, resolveVoiceForUser, getUserPreferredLang } from '../modules/settings.js';
+
+// Phase 8H routing rule, strictly in this order:
+//   a. detectLang is confident (Cantonese-marker hit, Simplified Chinese, or
+//      pure English) -> follow the input language outright.
+//   b. detectLang is NOT confident (Traditional Chinese with no Cantonese
+//      markers, very short input, etc.) -> follow the listener's preferred
+//      voice's language, if they've set one.
+//   c. No preference either -> detectLang's own default guess (already 'zh'
+//      for every not-confident case) — i.e. the same as the old behavior,
+//      just no longer applied to case (b) where a preference exists to defer to.
+// This was the actual "Chinese -> Cantonese can't switch back" bug: the old
+// resolveVoiceForLang only let a preference win when it already matched the
+// detected language, which is a no-op in a one-voice-per-language roster —
+// preference had zero effect on ambiguous input, ever.
+function resolveRoutedLang(detected, uid) {
+  if (detected.confident) return detected.lang;
+  return getUserPreferredLang(uid) || detected.lang;
+}
 
 const router = Router();
 // Accept 'application/octet-stream' too — some WebViews/browsers report a
@@ -208,10 +226,17 @@ router.post('/decide', async (req, res) => {
       currentMood: mood ?? '',
     };
 
+    // Single source of truth for language routing (Phase 8H): computed once,
+    // BEFORE djDecision runs, so it can drive both the say-field language
+    // instruction (passed into djDecision below) and the TTS voice selection
+    // — they literally cannot disagree since neither recomputes its own guess.
+    const detected = detectLang(normalizeDecideMessage(message));
+    const routedLang = resolveRoutedLang(detected, uid);
+
     let decision;
     const tAiStart = Date.now();
     try {
-      decision = await djDecision(uid, message, context);
+      decision = await djDecision(uid, message, context, routedLang);
     } catch (e) {
       if (e.code === 'OWN_KEY_INVALID' || e.code === 'AI_KEY_REQUIRED')
         return res.status(e.status || 401).json({ error: e.message, code: e.code });
@@ -222,14 +247,11 @@ router.post('/decide', async (req, res) => {
     // TTS is started the instant `say` is known and runs in parallel with the
     // *entire* song-resolution chain below (NCM lookup → YouTube resolution →
     // fallback retry, one independent chain per song), not just the NCM step
-    // — it's only joined at the end. Voice follows the language the listener actually wrote in — same
-    // detectLang() call djDecision uses internally for the "say" language
-    // instruction, on the same normalized message, so they can't disagree.
-    // The listener's preferred Profile voice wins if it's tagged with that
-    // same language (resolveVoiceForLang); otherwise plain language routing.
+    // — it's only joined at the end. resolveVoiceForLang still lets an exact
+    // -matching preferred voice win over a generic "first voice for X" pick,
+    // for when the roster someday has more than one voice per language.
     const tTtsStart = Date.now();
-    const lang = detectLang(normalizeDecideMessage(message));
-    const audioUrlPromise = synthesize({ text: decision.say, uid, voice: resolveVoiceForLang(lang, uid) });
+    const audioUrlPromise = synthesize({ text: decision.say, uid, voice: resolveVoiceForLang(routedLang, uid) });
     audioUrlPromise.catch(() => {}); // observed early so a later throw below can't cause an unhandled rejection
 
     // Language hard-constraint server-side filter: request_lang is set when
@@ -302,8 +324,11 @@ router.post('/transcribe', (req, res, next) => {
 
   try {
     const text = await transcribe(req.body, { uid, mimeType: req.headers['content-type'] });
-    // detectLang() returns exactly one of 'zh' | 'en' | 'yue' — pass it straight through.
-    const language = detectLang(text);
+    // Informational only (logged client-side, not used for routing) — the
+    // real voice-routing decision happens in /decide once this transcribed
+    // text is sent there as a normal message, going through the same
+    // resolveRoutedLang confidence+preference logic as typed input.
+    const language = detectLang(text).lang;
     res.json({ text, language });
   } catch (e) {
     if (e.code === 'OWN_KEY_INVALID') return res.status(e.status || 401).json({ error: e.message, code: e.code });
@@ -375,11 +400,15 @@ router.post('/plan/generate', async (req, res) => {
     const context = { weather: '', timeOfDay, recentPlays: [], currentMood: '' };
     let decision, audioUrl;
     try {
-      decision = await djDecision(uid, message, context);
       // No live listener message here (scheduler-triggered plan) — use the
       // listener's preferred Profile voice if they've set one; only fall
-      // back to inferring a language from their taste profile when they haven't.
+      // back to inferring a language from their taste profile when they
+      // haven't. Computed BEFORE djDecision, same single-source-of-truth
+      // reasoning as /decide, so the fixed English trigger message
+      // ("Good morning...") never locks the say-field into English
+      // regardless of what language the plan is actually voiced in.
       const planVoice = resolveVoiceForUser(uid) || resolveVoiceByLang(detectProfileLang(uid));
+      decision = await djDecision(uid, message, context, planVoice?.lang);
       audioUrl = await synthesize({ text: decision.say, uid, voice: planVoice }).catch(e => {
         if (e.code === 'OWN_KEY_INVALID') throw e;
         return null;

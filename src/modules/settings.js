@@ -43,6 +43,16 @@ export function getUserVoiceId(uid) {
   return row?.dj_voice ?? null;
 }
 
+// The language of the listener's chosen Profile voice, or null if they
+// haven't picked one — the fallback signal for ambiguous input (Phase 8H's
+// routing fix) and for scheduler-triggered plans with no live message at all.
+export function getUserPreferredLang(uid) {
+  const preferredId = uid ? getUserVoiceId(uid) : null;
+  if (!preferredId) return null;
+  const voice = getDjVoices().find(v => v.id === preferredId);
+  return voice?.lang ?? null;
+}
+
 // Base resolver: whichever configured voice is tagged with this language,
 // falling back to 'zh', falling back to the first voice.
 export function resolveVoiceByLang(lang) {

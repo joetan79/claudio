@@ -51,12 +51,32 @@ function normalizeSongs(result) {
 // in this role, so a single hit is a reliable Cantonese signal.
 const CANTONESE_CHARS = /[嘅咁唔係喺咗嚟畀]/;
 
+// A practical, non-exhaustive set of characters that exist ONLY in Simplified
+// Chinese (each has a different Traditional form). Their PRESENCE is a
+// reliable positive signal ("this is Simplified script, not a Hong Kong/Macau
+// -style Traditional writer") — but their ABSENCE is not reliable evidence of
+// the opposite, since a short or unlucky Simplified message can easily avoid
+// every character on this list. That asymmetry is deliberate: see detectLang.
+const SIMPLIFIED_ONLY_CHARS = /[么为会来后时现这还没从国学说识语与该过让觉认华义书号网络经业万无开关谁听欢乐爱个里边头视热风间亲见发张阳龙鱼鸟马汉兴举宁顶项须顺飞门车东电们长陈杨刘谢钟叶严实际继续践换别块极级声术卫阵归]/;
+
+// Returns { lang, confident }, not just a bare language string — voice
+// routing (radio.js) needs to know how much to trust this guess, not only
+// what the guess is. A message that's unambiguously in one language (has a
+// Cantonese-specific particle, or is Simplified Chinese, or has zero Chinese
+// characters at all) is confident=true and should drive voice selection
+// outright. A message that merely *contains* Chinese characters without any
+// of those positive signals — most commonly Traditional Chinese with no
+// Cantonese-specific wording, which reads identically whether the writer is
+// a Mandarin or Cantonese speaker — is confident=false: the caller should
+// defer to the listener's own voice preference rather than guessing 'zh'
+// with unearned certainty (see resolveRoutedLang in radio.js).
 export function detectLang(text) {
-  if (!text || !text.trim()) return 'zh';
-  if (CANTONESE_CHARS.test(text)) return 'yue';
+  if (!text || !text.trim()) return { lang: 'zh', confident: false };
+  if (CANTONESE_CHARS.test(text)) return { lang: 'yue', confident: true };
   const chineseChars = (text.match(/[一-鿿]/g) || []).length;
   const totalChars = text.replace(/\s/g, '').length;
-  return chineseChars === 0 && totalChars > 0 ? 'en' : 'zh';
+  if (chineseChars === 0) return { lang: 'en', confident: totalChars > 0 };
+  return { lang: 'zh', confident: SIMPLIFIED_ONLY_CHARS.test(text) };
 }
 
 const DEFAULT_DECIDE_MESSAGE = 'What should I listen to now?';
@@ -77,7 +97,7 @@ export function normalizeDecideMessage(userMessage) {
 export function detectProfileLang(uid) {
   const taste = readUserFile(uid, 'taste.md');
   if (!taste || taste === DEFAULT_TASTE_MD) return 'zh';
-  return detectLang(taste);
+  return detectLang(taste).lang;
 }
 
 // Fully static across every user and every request — no timestamps, no
@@ -241,7 +261,14 @@ function getUserAiConfig(uid) {
   };
 }
 
-export async function djDecision(uid, userMessage, context) {
+// routedLang: the FINAL language the caller has already decided to route
+// voice/TTS to (radio.js's resolveRoutedLang, or the scheduler's preference
+// -first chain) — used here for the say-field language instruction too, so
+// say and voice can never disagree. Optional for backward safety (falls back
+// to a bare detectLang(message) on this call's own text if omitted), but
+// every real caller should pass it — that's the whole point of Phase 8H's
+// fix: one routing decision, not two independently-computed ones.
+export async function djDecision(uid, userMessage, context, routedLang) {
   const taste = readUserFile(uid, 'taste.md');
   const routines = readUserFile(uid, 'routines.md');
 
@@ -296,7 +323,7 @@ export async function djDecision(uid, userMessage, context) {
     `## Listener says\n"${message}"`,
   ].join('\n\n---\n\n');
 
-  const lang = detectLang(message);
+  const lang = routedLang || detectLang(message).lang;
   const langInstruction = lang === 'en'
     ? 'CRITICAL OVERRIDE: The listener wrote in English only. Your "say" field MUST be written entirely in English. Do not use any Chinese characters in "say".'
     : lang === 'yue'

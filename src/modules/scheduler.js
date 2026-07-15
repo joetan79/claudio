@@ -19,7 +19,14 @@ async function generateDailyPlan(timeLabel, message, timeOfDay) {
   for (const user of users) {
     try {
       const context = { weather: '', timeOfDay, recentPlays: [], currentMood: '' };
-      const decision = await djDecision(user.id, message, context);
+      // No live listener message for a scheduler-triggered plan — use the
+      // listener's preferred Profile voice if they've set one; only fall
+      // back to inferring a language from their taste profile when they
+      // haven't. Computed BEFORE djDecision (single source of truth — same
+      // reasoning as radio.js) so the fixed English trigger message never
+      // locks the say-field into English regardless of the plan's actual voice.
+      const voice = resolveVoiceForUser(user.id) || resolveVoiceByLang(detectProfileLang(user.id));
+      const decision = await djDecision(user.id, message, context, voice?.lang);
       // No YT/NCM resolution happens for scheduler plans — just trim
       // djDecision's 7 over-provisioned candidates back to 5.
       const trimmedDecision = { ...decision, play: (decision.play || []).slice(0, 5) };
@@ -29,10 +36,6 @@ async function generateDailyPlan(timeLabel, message, timeOfDay) {
         'INSERT OR REPLACE INTO memory (key, value, updated_at) VALUES (?, ?, ?)'
       ).run(`plan_${timeLabel}`, JSON.stringify(trimmedDecision), Date.now());
 
-      // No live listener message for a scheduler-triggered plan — use the
-      // listener's preferred Profile voice if they've set one; only fall
-      // back to inferring a language from their taste profile when they haven't.
-      const voice = resolveVoiceForUser(user.id) || resolveVoiceByLang(detectProfileLang(user.id));
       if (decision.say) await synthesize({ text: decision.say, uid: user.id, voice });
 
       console.log(`[Scheduler] Done for ${user.username}`);
