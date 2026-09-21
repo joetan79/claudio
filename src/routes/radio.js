@@ -9,21 +9,19 @@ import { searchYouTube, resolveSongVideoBudgeted, checkEmbeddableBatch } from '.
 import { resolveVoiceByLang, resolveVoiceForLang, resolveVoiceForUser, getUserPreferredLang } from '../modules/settings.js';
 import { lookupSongbookVideoId } from '../modules/songbook.js';
 
-// Phase 8H routing rule, strictly in this order:
-//   a. detectLang is confident (Cantonese-marker hit, Simplified Chinese, or
-//      pure English) -> follow the input language outright.
-//   b. detectLang is NOT confident (Traditional Chinese with no Cantonese
-//      markers, very short input, etc.) -> follow the listener's preferred
-//      voice's language, if they've set one.
-//   c. No preference either -> detectLang's own default guess (already 'zh'
-//      for every not-confident case) — i.e. the same as the old behavior,
-//      just no longer applied to case (b) where a preference exists to defer to.
-// This was the actual "Chinese -> Cantonese can't switch back" bug: the old
-// resolveVoiceForLang only let a preference win when it already matched the
-// detected language, which is a no-op in a one-voice-per-language roster —
-// preference had zero effect on ambiguous input, ever.
+// A listener's chosen Profile voice is a hard commitment: once they've set
+// one, Claudio speaks ONLY in that language, no matter what language they
+// type/speak in THIS message — picking English must never let a Chinese
+// message make the DJ answer in Chinese, and vice versa for zh/yue. Only
+// when no voice preference exists yet do we fall back to guessing from the
+// message itself (detectLang), same as before a voice is ever chosen.
+//
+// (This replaces the earlier "Phase 8H" rule, which let a confidently-
+// detected input language override the preference outright — that was a
+// deliberate code-switching feature, but it meant an English-voice listener
+// who typed one Chinese word got answered in Chinese, which is exactly the
+// "no matter what" guarantee a chosen voice is supposed to give.)
 function resolveRoutedLang(detected, uid) {
-  if (detected.confident) return detected.lang;
   return getUserPreferredLang(uid) || detected.lang;
 }
 

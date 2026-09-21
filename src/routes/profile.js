@@ -16,7 +16,15 @@ const router = Router();
 router.use(requireAuth);
 
 const MAX_LEN = 5000;
-const VOICE_PREVIEW_TEXT = '你好，我是你的 DJ';
+// Keyed by voice.lang — previewing a voice must speak in ITS language, not a
+// single fixed script, or an English/Cantonese voice reads Chinese text
+// (wrong-language preview, sounds nothing like the actual broadcast).
+const VOICE_PREVIEW_TEXT = {
+  zh: '你好，我是你的 DJ',
+  yue: '你好，我係你嘅 DJ',
+  en: "Hey, I'm your DJ",
+};
+const VOICE_PREVIEW_TEXT_DEFAULT = VOICE_PREVIEW_TEXT.zh;
 
 function userFilePath(uid, filename) {
   return path.join(DATA_DIR, 'users', uid, filename);
@@ -145,7 +153,8 @@ router.post('/voice/preview', async (req, res) => {
   if (!entry) return res.status(400).json({ error: 'unknown voice id' });
 
   try {
-    const audioUrl = await synthesize({ text: VOICE_PREVIEW_TEXT, uid: req.user.uid, voice: entry });
+    const previewText = VOICE_PREVIEW_TEXT[entry.lang] || VOICE_PREVIEW_TEXT_DEFAULT;
+    const audioUrl = await synthesize({ text: previewText, uid: req.user.uid, voice: entry });
     if (!audioUrl) return res.status(502).json({ error: 'TTS failed' });
     res.json({ audioUrl });
   } catch (e) {
