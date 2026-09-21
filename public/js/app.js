@@ -1874,7 +1874,7 @@ function restorePlayerButtons() {
   } catch(e) {}
 }
 
-function markYTUnavailable(btn, songName, artist, index) {
+async function markYTUnavailable(btn, songName, artist, index) {
   if (!btn) return;
   btn.textContent = '⚠ Unavailable';
   btn.disabled = true;
@@ -1889,9 +1889,28 @@ function markYTUnavailable(btn, songName, artist, index) {
     link.style.cssText = 'font-size:0.78rem;color:#888;text-decoration:underline';
     btn.insertAdjacentElement('afterend', link);
   }
-  // Advance queue if this song was playing in sequence
+
+  // Every resolution/fallback option has genuinely failed at this point —
+  // let the DJ say so (short, fixed line, not another AI round-trip) instead
+  // of silently leaving a dead button for the listener to notice on their
+  // own, then move straight on to the next song. Per Joe's request
+  // 2026-09-21: skip is fine, but the DJ should acknowledge why and
+  // introduce something else rather than going quiet.
+  try {
+    const { audioUrl } = await api.unavailableNotice(songName);
+    if (audioUrl) playDJAudio(audioUrl);
+  } catch (e) {
+    mlog('unavailableNotice error:', e.message);
+  }
+
+  const advanceDelay = 1800; // gives the short notice line room to be heard before the next song starts
   if (playQueue.length > 0 && playQueueIndex === index) {
-    setTimeout(() => { playQueueIndex++; playFromQueue(); }, 800);
+    setTimeout(() => { playQueueIndex++; playFromQueue(); }, advanceDelay);
+  } else {
+    const next = window._currentSongs?.[index + 1];
+    if (next?.yt?.videoId) {
+      setTimeout(() => window.toggleYT(index + 1, next.yt.videoId), advanceDelay);
+    }
   }
 }
 
@@ -1932,7 +1951,7 @@ function createYTPlayer(index, videoId, songName, artist, altIndex = 0, resumeSe
           song?.artist || song?.ncm?.artist || ''
         );
       },
-      onError: function(e) {
+      onError: async function(e) {
         mlog('onError:', e.data, 'altIndex:', altIndex);
         const btn = document.getElementById('yt-btn-' + index);
         if (e.data === 150 || e.data === 101 || e.data === 100) {
@@ -1945,10 +1964,32 @@ function createYTPlayer(index, videoId, songName, artist, altIndex = 0, resumeSe
             mlog('switching source:', videoId, '->', nextId);
             if (btn) btn.textContent = '⏳ Loading...';
             createYTPlayer(index, nextId, songName, artist, nextIndex);
-          } else {
-            console.log(`[yt] onError ${e.data} on ${videoId} (song ${index}) → no more candidates, marking unavailable`);
-            markYTUnavailable(btn, songName, artist, index);
+            return;
           }
+          // Every alt from the ORIGINAL tier failed too — that tier is
+          // usually all official/label uploads sharing the same per-domain
+          // embed restriction the server can't see (see resolveSongVideoFallback
+          // in youtube.js). Ask the server for a fresh candidate from a
+          // different tier before giving up, but only once per song.
+          if (song && !song._fallbackTried) {
+            song._fallbackTried = true;
+            console.log(`[yt] onError ${e.data} on ${videoId} (song ${index}) → all alts exhausted, requesting server fallback`);
+            if (btn) btn.textContent = '⏳ Loading...';
+            try {
+              const tried = [videoId, ...altIds];
+              const { yt } = await api.songFallback(songName, artist, tried);
+              if (yt?.videoId && !tried.includes(yt.videoId)) {
+                song.yt = yt;
+                console.log(`[yt] server fallback found ${yt.videoId} (source=${yt.source}) for song ${index}`);
+                createYTPlayer(index, yt.videoId, songName, artist, 0);
+                return;
+              }
+            } catch (err) {
+              mlog('songFallback error:', err.message);
+            }
+          }
+          console.log(`[yt] onError ${e.data} on ${videoId} (song ${index}) → no more candidates, marking unavailable`);
+          markYTUnavailable(btn, songName, artist, index);
         } else {
           if (btn) btn.textContent = '⚠ Error ' + e.data;
         }

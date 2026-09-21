@@ -64,6 +64,12 @@ const api = {
   played(song_name, artist, song_id) {
     return this.request('POST', '/api/radio/played', { song_name, artist, song_id: song_id || null });
   },
+  songFallback(title, artist, excludeIds) {
+    return this.request('POST', '/api/radio/song-fallback', { title, artist, excludeIds });
+  },
+  unavailableNotice(songName) {
+    return this.request('POST', '/api/radio/unavailable-notice', { songName });
+  },
   async transcribe(blob) {
     const contentType = blob.type || 'audio/webm';
     const headers = { 'Content-Type': contentType };

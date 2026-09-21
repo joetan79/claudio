@@ -218,7 +218,15 @@ export async function checkEmbeddableBatch(videoIds) {
         found.add(item.id);
         const embeddable = item.status?.embeddable === true;
         const isPublic = item.status?.privacyStatus === 'public';
-        const hasRegionRestriction = !!item.contentDetails?.regionRestriction;
+        // regionRestriction.allowed (a whitelist) is standard on almost every
+        // officially-licensed major-label track — it's normal, not a real
+        // restriction, and typically covers 100+ countries anyway. Only an
+        // explicit .blocked list is an actual restriction worth rejecting on.
+        // Treating ANY regionRestriction object as disqualifying (the old
+        // check) silently dropped nearly all real commercial music — e.g.
+        // Olivia Rodrigo's "stupid song" has an .allowed list covering HK and
+        // 100+ other countries but was rejected outright. See chat 2026-09-21.
+        const hasRegionRestriction = !!item.contentDetails?.regionRestriction?.blocked?.length;
         const ok = embeddable && isPublic && !hasRegionRestriction;
         result.set(item.id, ok);
         cacheSet(item.id, ok);
@@ -399,6 +407,49 @@ export async function resolveSongVideoBudgeted(item, budgetMs = DEFAULT_SONG_BUD
   }
   const tier3 = await searchYouTubeYtsr(request.query).catch(() => []);
   return tryTier(tier3, 'ytsr');
+}
+
+// Client-triggered re-resolution when EVERY id from the original
+// resolveSongVideoBudgeted result (the winner plus its altIds) failed to
+// actually play in the browser (YT player onError 100/101/150). This
+// happens because embeddability per the Data API (checkEmbeddableBatch)
+// only reflects the video's general "embedding allowed" toggle — it can't
+// see a label's per-domain embed whitelist, which is common on official
+// major-label uploads (the exact source tier1/ytmusic tends to surface) and
+// isn't exposed anywhere in the Data API response. altIds don't help here
+// since they're drawn from the SAME tier as the original winner, so they
+// usually share the same restriction. This re-runs the full tier chain
+// excluding every id already tried, which naturally tends to land on
+// tier2/tier3 (general search/ytsr) results — reuploads, lyric videos, etc.
+// from channels that don't carry that domain restriction. See chat
+// 2026-09-21 — Olivia Rodrigo's "stupid song" resolved fine server-side but
+// showed "unavailable" in the player for exactly this reason.
+export async function resolveSongVideoFallback(item, excludeIds, budgetMs = DEFAULT_SONG_BUDGET_MS) {
+  const tStart = Date.now();
+  const request = normalizeRequest(item);
+  const doMatchCheck = request.strict;
+  const excludeSet = new Set(excludeIds || []);
+  const notExcluded = candidates => candidates.filter(c => !excludeSet.has(c.videoId));
+
+  const tryTier = async (candidates, tierLabel) => {
+    const fresh = notExcluded(candidates);
+    if (!fresh.length) return null;
+    const embedMap = await checkEmbeddableBatch(fresh.map(c => c.videoId));
+    return pickWinner(fresh, embedMap, request, tierLabel, doMatchCheck);
+  };
+
+  const tier1 = await searchYTMusic(request.query).catch(() => []);
+  let winner = await tryTier(tier1, 'ytmusic-fallback');
+  if (winner) return winner;
+
+  const tier2 = await searchYouTubeInnertube(request.query).catch(() => []);
+  winner = await tryTier(tier2, 'search-fallback');
+  if (winner) return winner;
+
+  const remaining = budgetMs - (Date.now() - tStart);
+  if (remaining <= TIER3_MIN_REMAINING_MS) return null;
+  const tier3 = await searchYouTubeYtsr(request.query).catch(() => []);
+  return tryTier(tier3, 'ytsr-fallback');
 }
 
 // Resolves one videoId per song, batching every tier's Data API embeddability

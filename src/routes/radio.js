@@ -5,7 +5,7 @@ import { djDecision, getTimeOfDay, detectLang, detectProfileLang, normalizeDecid
 import { synthesize } from '../modules/tts.js';
 import { transcribe } from '../modules/asr.js';
 import { resolveSong, getSongUrl } from '../modules/ncm.js';
-import { searchYouTube, resolveSongVideoBudgeted, checkEmbeddableBatch } from '../modules/youtube.js';
+import { searchYouTube, resolveSongVideoBudgeted, resolveSongVideoFallback, checkEmbeddableBatch } from '../modules/youtube.js';
 import { resolveVoiceByLang, resolveVoiceForLang, resolveVoiceForUser, getUserPreferredLang } from '../modules/settings.js';
 import { lookupSongbookVideoId } from '../modules/songbook.js';
 
@@ -275,7 +275,39 @@ router.post('/decide', async (req, res) => {
     // Trusts the AI's own per-song `lang` tag as-is rather than independently
     // re-verifying it (see the yue/Mandarin sanity-check log inside resolveOneSong).
     const requestLang = decision.request_lang || null;
-    const rawSongs = decision.play || [];
+    let rawSongs = decision.play || [];
+
+    // A listener naming one specific song by title must not depend on the
+    // AI's own recall of whether that song exists — it demonstrably
+    // sometimes substitutes a different, fabricated-but-more-familiar title
+    // instead of the listener's real one (e.g. asked for Olivia Rodrigo's
+    // real deep-cut "stupid song", got a made-up "stupid for you" back).
+    // decision.explicit_song_request carries the listener's LITERAL wording
+    // (djDecision is instructed not to correct/substitute it); inject it as
+    // the top-priority candidate here so it goes through the exact same
+    // live NCM/YouTube resolution + correlation check as everything else —
+    // that's the actual source of truth for whether it's real, not the AI's
+    // confidence. If it can't be resolved, it's dropped like any other
+    // unplayable pick — same graceful degradation, no new failure mode.
+    const explicitReq = decision.explicit_song_request;
+    if (explicitReq?.title) {
+      const norm = s => (s || '').toLowerCase().trim();
+      const alreadyIncluded = rawSongs.some(s => norm(s.title) === norm(explicitReq.title));
+      if (!alreadyIncluded) {
+        rawSongs = [
+          {
+            query: `${explicitReq.title} ${explicitReq.artist || ''}`.trim(),
+            title: explicitReq.title,
+            artist: explicitReq.artist || '',
+            lang: requestLang || routedLang,
+            reason: "Listener's explicit request — verified against the real catalog server-side",
+          },
+          ...rawSongs,
+        ];
+        console.log(`[radio] explicit_song_request injected ahead of AI's own play array: title="${explicitReq.title}" artist="${explicitReq.artist || ''}"`);
+      }
+    }
+
     const songs = requestLang ? rawSongs.filter(s => s.lang === requestLang) : rawSongs;
     if (requestLang && songs.length < rawSongs.length) {
       console.warn(`[radio] request_lang=${requestLang}: ${rawSongs.length} candidates -> ${songs.length} after language filter`);
@@ -393,6 +425,45 @@ router.get('/ytsr', async (req, res) => {
   if (!q) return res.status(400).json({ error: 'missing query' });
   const yt = await searchYouTube(q).catch(() => null);
   res.json({ yt: yt ?? null });
+});
+
+// Called by the client when a song's winner videoId AND every one of its
+// altIds all failed to actually play (YT player onError 100/101/150) —
+// see resolveSongVideoFallback's comment in youtube.js for why this can
+// happen even though the server's own embeddability check passed.
+router.post('/song-fallback', async (req, res) => {
+  const { title, artist, excludeIds } = req.body ?? {};
+  if (!title) return res.status(400).json({ error: 'title is required' });
+  const yt = await resolveSongVideoFallback(
+    { title, artist: artist || '' },
+    Array.isArray(excludeIds) ? excludeIds : [],
+  ).catch(() => null);
+  res.json({ yt: yt ?? null });
+});
+
+// Called by the client once a song is confirmed truly unplayable (every
+// videoId from the original resolution AND the /song-fallback retry both
+// failed in the browser) — a short, FIXED (not AI-generated — no need for
+// an extra Claude round-trip for a templated line) spoken notice so the
+// listener hears WHY it's being skipped instead of silently landing on a
+// dead "Unavailable" button, per Joe's request 2026-09-21.
+const UNAVAILABLE_NOTICE = {
+  zh: n => `${n ? `"${n}" 這首` : '這首'}暫時沒辦法在這邊播放，可能是版權問題，我們聽下一首吧。`,
+  yue: n => `${n ? `"${n}" 呢首` : '呢首'}暫時播唔到，可能係版權問題嚟嘅，聽返第二首啦。`,
+  en: n => `${n ? `"${n}"` : 'That one'} isn't available to stream here — probably a licensing thing. Let's move on.`,
+};
+router.post('/unavailable-notice', async (req, res) => {
+  const uid = req.user.uid;
+  const { songName } = req.body ?? {};
+  try {
+    const voice = resolveVoiceForUser(uid) || resolveVoiceByLang(detectProfileLang(uid));
+    const text = (UNAVAILABLE_NOTICE[voice?.lang] || UNAVAILABLE_NOTICE.en)(songName || '');
+    const audioUrl = await synthesize({ text, uid, voice });
+    res.json({ audioUrl: audioUrl ?? null, text });
+  } catch (e) {
+    if (e.code === 'OWN_KEY_INVALID') return res.status(e.status || 401).json({ error: e.message, code: e.code });
+    res.json({ audioUrl: null, text: null });
+  }
 });
 
 router.post('/plan/generate', async (req, res) => {
