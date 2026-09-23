@@ -18,7 +18,7 @@ function canonicalizeScript(s) {
 }
 
 const PREFERRED = ['official', 'music', 'vevo', 'topic'];
-const BLOCKED_TITLE = /cover|翻唱|remix|live|现场|伴奏|instrumental|karaoke/i;
+const BLOCKED_TITLE = /cover|翻唱|remix|live|现场|伴奏|instrumental|karaoke|vlog|日常|生活記錄|生活记录/i;
 const MAX_CANDIDATES = 5;
 const MAX_ALT_IDS = 3;
 const EMBED_CACHE_LIMIT = 500;
@@ -48,7 +48,7 @@ const MAX_FALLBACK_DURATION_SEC = 600;
 // are deliberately NOT blocked here, since a legitimate requested cover
 // often only resolves via a plain video-title search, unlike YT Music's
 // tier1 catalog search where a clean "song" entry should exist instead).
-const BLOCKED_FALLBACK_TITLE = /gameplay|实况|攻略|直播|教程|tutorial|reaction|合集|串烧|mix|全集|8d|倍速|sped\s*up|slowed|花絮|幕后|\blive\b|现场|伴奏|instrumental|karaoke/i;
+const BLOCKED_FALLBACK_TITLE = /gameplay|实况|攻略|直播|教程|tutorial|reaction|合集|串烧|mix|全集|8d|倍速|sped\s*up|slowed|花絮|幕后|\blive\b|现场|伴奏|instrumental|karaoke|vlog|日常|生活記錄|生活记录/i;
 // Reposting/carrier channels — lyric-video mills, subtitle groups, cover
 // compilations, "music sharing" aggregators — routinely rehost real songs
 // under garbled titles and their own branding as the uploader name. A
@@ -101,13 +101,37 @@ function splitArtists(artist) {
   return (artist || '').split(ARTIST_SEPARATOR).map(a => a.trim()).filter(Boolean);
 }
 
+// Splits a title on punctuation/symbols/whitespace (CJK brackets, dashes,
+// pipes, decorative symbols like ✰, etc.) so a short title can be checked
+// against actual delimited SEGMENTS of a candidate title, not just "does it
+// appear anywhere as a raw substring".
+const TITLE_SPLIT_RE = /[\s\p{P}\p{S}]+/gu;
+
 // "歌名主体匹配": candidate title must share the requested title's core,
 // not just any track by the same artist. Falls back to token overlap for
 // word-order/spacing differences between the two titles.
+//
+// Short requested titles (common for Cantopop/Mandopop 2-3 character titles,
+// e.g. "夢遊") get a stricter, segment-based check rather than the general
+// bidirectional-substring shortcut below: a short CJK title is disturbingly
+// likely to appear as a raw substring inside a much longer, completely
+// unrelated title — e.g. a fan vlog titled "...之夢遊玫瑰花園..." contains
+// "夢遊" but obviously isn't the song, and this exact case got baked into
+// songbook.json as a wrong entry (Serrini/"夢遊" → a personal vlog, not a
+// song) via this same substring shortcut during songbook verification. See
+// chat 2026-09-23.
 function titleBodyMatches(candidateTitle, requestedTitle) {
   const reqCompact = normalizeCompact(requestedTitle);
   const candCompact = normalizeCompact(candidateTitle);
   if (!reqCompact || !candCompact) return true;
+
+  if (reqCompact.length <= 3) {
+    const segments = (candidateTitle || '').split(TITLE_SPLIT_RE).map(normalizeCompact).filter(Boolean);
+    return segments.some(seg =>
+      seg === reqCompact || (seg.includes(reqCompact) && seg.length <= reqCompact.length + 2)
+    );
+  }
+
   if (candCompact.includes(reqCompact) || reqCompact.includes(candCompact)) return true;
   const reqTokens = extractTokens(requestedTitle);
   if (!reqTokens.length) return true;
