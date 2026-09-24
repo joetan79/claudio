@@ -3,15 +3,20 @@
 // output_config.effort — Sonnet 4.5, Haiku 4.5, and dated/legacy ids reject
 // it with a 400, so this must stay an allowlist, not a blocklist.
 const ANTHROPIC_EFFORT = process.env.ANTHROPIC_EFFORT ?? 'low';
-const EFFORT_CAPABLE_MODEL_RE = /^claude-(opus-4-[5-8]|sonnet-4-6|sonnet-5|fable-5|mythos-5)$/;
+const EFFORT_CAPABLE_MODEL_RE = /^claude-(opus-4-[5-8]|opus-5(-5)?|sonnet-4-6|sonnet-5|fable-5(-1)?|mythos-5(-1)?)$/;
 
-async function callAnthropic({ apiKey, model, system, messages }) {
+async function callAnthropic({ apiKey, model, system, messages, outputSchema }) {
   const useEffort = ANTHROPIC_EFFORT && ANTHROPIC_EFFORT !== 'off' && EFFORT_CAPABLE_MODEL_RE.test(model);
   const body = JSON.stringify({
     model,
     max_tokens: 4096,
     ...(system ? { system } : {}),
-    ...(useEffort ? { output_config: { effort: ANTHROPIC_EFFORT } } : {}),
+    ...((useEffort || outputSchema) ? {
+      output_config: {
+        ...(useEffort ? { effort: ANTHROPIC_EFFORT } : {}),
+        ...(outputSchema ? { format: { type: 'json_schema', schema: outputSchema } } : {}),
+      },
+    } : {}),
     messages,
   });
 
@@ -90,7 +95,9 @@ async function callOpenRouter({ apiKey, model, system, messages }) {
   };
 }
 
-export async function aiComplete({ provider, model, apiKey, system, messages }) {
+// outputSchema: JSON Schema for the reply. Enforced via structured outputs on
+// the Anthropic path; the OpenRouter path ignores it and relies on the prompt.
+export async function aiComplete({ provider, model, apiKey, system, messages, outputSchema }) {
   if (provider === 'openrouter') return callOpenRouter({ apiKey, model, system, messages });
-  return callAnthropic({ apiKey, model, system, messages });
+  return callAnthropic({ apiKey, model, system, messages, outputSchema });
 }
